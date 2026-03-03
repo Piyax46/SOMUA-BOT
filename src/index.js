@@ -106,18 +106,38 @@ async function main() {
     }
   });
 
-  // Error logging
+  // Error & Debug logging
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
+  client.on('shardReady', (id) => console.log(`[Shard ${id}] Shard is ready!`));
+  client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected:`, event));
+  client.on('shardReconnecting', (id) => console.log(`[Shard ${id}] Reconnecting...`));
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
+  });
+
+  process.on('uncaughtException', (err) => {
+    console.error('[Uncaught Exception] thrown:', err);
+    process.exit(1);
+  });
 
   // Verify token
-  if (!process.env.DISCORD_TOKEN) {
+  const token = process.env.DISCORD_TOKEN;
+  if (!token) {
     console.error('❌ DISCORD_TOKEN is missing in environment variables!');
     process.exit(1);
   }
 
+  // Token format check (Basic validation)
+  if (token.length < 50) {
+    console.warn(`⚠️ Token seems unusually short (${token.length} chars). Please double check it!`);
+  }
+
   console.log('[Login] Attempting to connect to Discord...');
-  client.login(process.env.DISCORD_TOKEN).catch(err => {
+  client.login(token).then(() => {
+    console.log('[Login] Login successful (Promise resolved)');
+  }).catch(err => {
     console.error('❌ Failed to login to Discord:', err.message);
     process.exit(1);
   });
