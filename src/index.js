@@ -2,15 +2,16 @@ require('dotenv').config();
 
 // Pre-load sodium before anything else to ensure voice encryption works
 const sodium = require('libsodium-wrappers');
-const express = require('express');
 
 async function main() {
-  // Keep-alive server for Render
-  const app = express();
-  const port = process.env.PORT || 3000;
-  app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
-  app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
-  app.listen(port, () => console.log(`[Keep-Alive] Listening on port ${port}`));
+  // Optional HTTP server for platforms that require port binding (Render, etc.)
+  if (process.env.PORT) {
+    const express = require('express');
+    const app = express();
+    app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
+    app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+    app.listen(process.env.PORT, () => console.log(`[HTTP] Listening on port ${process.env.PORT}`));
+  }
 
   console.log(`[System] Platform: ${process.platform} | Node: ${process.version}`);
 
@@ -30,10 +31,9 @@ async function main() {
       GatewayIntentBits.GuildVoiceStates,
       GatewayIntentBits.MessageContent,
     ],
-    // REST rate limit config - be patient with retries
     rest: {
-      retries: 5,
-      timeout: 60_000,
+      retries: 3,
+      timeout: 30_000,
     },
   });
 
@@ -114,7 +114,7 @@ async function main() {
     }
   });
 
-  // Error logging (minimal)
+  // Error logging
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
   client.on('shardReady', (id) => console.log(`[Shard ${id}] Ready!`));
@@ -133,30 +133,15 @@ async function main() {
   }
   token = token.trim();
 
-  // Login with retry logic for rate limits (429)
-  async function loginWithRetry(maxRetries = 5) {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        console.log(`[Login] Attempt ${attempt}/${maxRetries}...`);
-        await client.login(token);
-        console.log('[Login] ✅ Connected to Discord!');
-        return;
-      } catch (err) {
-        console.error(`[Login] ❌ Attempt ${attempt} failed: ${err.message}`);
-        if (attempt < maxRetries) {
-          // Wait longer each retry (30s, 60s, 90s, 120s, ...)
-          const waitSec = attempt * 30;
-          console.log(`[Login] Waiting ${waitSec}s before retry...`);
-          await new Promise(r => setTimeout(r, waitSec * 1000));
-        } else {
-          console.error('[Login] All attempts failed. Exiting.');
-          process.exit(1);
-        }
-      }
-    }
+  // Login
+  console.log('[Login] Connecting to Discord...');
+  try {
+    await client.login(token);
+    console.log('[Login] ✅ Connected!');
+  } catch (err) {
+    console.error('[Login] ❌ Failed:', err.message);
+    process.exit(1);
   }
-
-  await loginWithRetry();
 }
 
 main().catch(err => {
