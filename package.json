@@ -15,6 +15,7 @@
     "@snazzah/davey": "^0.1.10",
     "discord.js": "^14.25.1",
     "dotenv": "^16.4.7",
+    "express": "^5.2.1",
     "ffmpeg-static": "^5.2.0",
     "libsodium-wrappers": "^0.7.15",
     "opusscript": "^0.1.1",

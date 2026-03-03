@@ -2,8 +2,15 @@ require('dotenv').config();
 
 // Pre-load sodium before anything else to ensure voice encryption works
 const sodium = require('libsodium-wrappers');
+const express = require('express');
 
 async function main() {
+  // Keep-alive server for Render
+  const app = express();
+  const port = process.env.PORT || 3000;
+  app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
+  app.listen(port, () => console.log(`[Keep-Alive] Listening on port ${port}`));
+
   // Wait for sodium to be ready BEFORE creating the Discord client
   await sodium.ready;
   console.log('[Boot] Sodium encryption ready ✅');
