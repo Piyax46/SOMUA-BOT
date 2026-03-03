@@ -106,7 +106,24 @@ async function main() {
     }
   });
 
-  client.login(process.env.DISCORD_TOKEN);
+  // Error logging
+  client.on('error', (err) => console.error('[Client Error]', err));
+  client.on('warn', (info) => console.warn('[Client Warn]', info));
+
+  // Verify token
+  if (!process.env.DISCORD_TOKEN) {
+    console.error('❌ DISCORD_TOKEN is missing in environment variables!');
+    process.exit(1);
+  }
+
+  console.log('[Login] Attempting to connect to Discord...');
+  client.login(process.env.DISCORD_TOKEN).catch(err => {
+    console.error('❌ Failed to login to Discord:', err.message);
+    process.exit(1);
+  });
 }
 
-main().catch(console.error);
+main().catch(err => {
+  console.error('❌ Main loop error:', err);
+  process.exit(1);
+});
