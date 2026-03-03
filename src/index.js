@@ -14,6 +14,14 @@ async function main() {
   // Log platform and Node info for debugging
   console.log(`[System] Platform: ${process.platform} | Node: ${process.version}`);
 
+  // Connectivity Test
+  const https = require('https');
+  https.get('https://discord.com/api/v10/gateway', (res) => {
+    console.log(`[Diagnostic] Discord API status: ${res.statusCode}`);
+  }).on('error', (err) => {
+    console.error('[Diagnostic] Discord API unreachable:', err.message);
+  });
+
   // Wait for sodium to be ready BEFORE creating the Discord client
   await sodium.ready;
   console.log('[Boot] Sodium encryption ready ✅');
@@ -113,10 +121,8 @@ async function main() {
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
   client.on('debug', (info) => {
-    // Only log important debug info to avoid spam
-    if (info.includes('WebSocket') || info.includes('Ready') || info.includes('Connect') || info.includes('Heartbeat')) {
-      console.log('[Debug]', info);
-    }
+    // Log ALL debug info on Render to find the hang
+    console.log('[Debug]', info);
   });
 
   // RAW Gateway packets (Last resort for debugging)
