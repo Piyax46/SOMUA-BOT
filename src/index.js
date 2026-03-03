@@ -11,6 +11,9 @@ async function main() {
   app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
   app.listen(port, () => console.log(`[Keep-Alive] Listening on port ${port}`));
 
+  // Log platform and Node info for debugging
+  console.log(`[System] Platform: ${process.platform} | Node: ${process.version}`);
+
   // Wait for sodium to be ready BEFORE creating the Discord client
   await sodium.ready;
   console.log('[Boot] Sodium encryption ready ✅');
@@ -111,9 +114,14 @@ async function main() {
   client.on('warn', (info) => console.warn('[Client Warn]', info));
   client.on('debug', (info) => {
     // Only log important debug info to avoid spam
-    if (info.includes('WebSocket') || info.includes('Ready') || info.includes('Connect')) {
+    if (info.includes('WebSocket') || info.includes('Ready') || info.includes('Connect') || info.includes('Heartbeat')) {
       console.log('[Debug]', info);
     }
+  });
+
+  // RAW Gateway packets (Last resort for debugging)
+  client.on('raw', (p) => {
+    if (p.t === 'READY' || p.t === 'RESUMED') console.log(`[Raw Gateway] Event: ${p.t} Received!`);
   });
   client.on('shardReady', (id) => console.log(`[Shard ${id}] Shard is ready!`));
   client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected:`, event));
