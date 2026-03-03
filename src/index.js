@@ -9,18 +9,10 @@ async function main() {
   const app = express();
   const port = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
+  app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
   app.listen(port, () => console.log(`[Keep-Alive] Listening on port ${port}`));
 
-  // Log platform and Node info for debugging
   console.log(`[System] Platform: ${process.platform} | Node: ${process.version}`);
-
-  // Connectivity Test
-  const https = require('https');
-  https.get('https://discord.com/api/v10/gateway', (res) => {
-    console.log(`[Diagnostic] Discord API status: ${res.statusCode}`);
-  }).on('error', (err) => {
-    console.error('[Diagnostic] Discord API unreachable:', err.message);
-  });
 
   // Wait for sodium to be ready BEFORE creating the Discord client
   await sodium.ready;
@@ -38,6 +30,11 @@ async function main() {
       GatewayIntentBits.GuildVoiceStates,
       GatewayIntentBits.MessageContent,
     ],
+    // REST rate limit config - be patient with retries
+    rest: {
+      retries: 5,
+      timeout: 60_000,
+    },
   });
 
   const PREFIX = process.env.BOT_PREFIX || '!';
@@ -117,54 +114,52 @@ async function main() {
     }
   });
 
-  // Error & Debug logging
+  // Error logging (minimal)
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
-  client.on('debug', (info) => {
-    // Log ALL debug info on Render to find the hang
-    console.log('[Debug]', info);
-  });
-
-  // RAW Gateway packets (Last resort for debugging)
-  client.on('raw', (p) => {
-    if (p.t === 'READY' || p.t === 'RESUMED') console.log(`[Raw Gateway] Event: ${p.t} Received!`);
-  });
-  client.on('shardReady', (id) => console.log(`[Shard ${id}] Shard is ready!`));
-  client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected:`, event));
+  client.on('shardReady', (id) => console.log(`[Shard ${id}] Ready!`));
+  client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected`));
   client.on('shardReconnecting', (id) => console.log(`[Shard ${id}] Reconnecting...`));
 
-  process.on('unhandledRejection', (reason, promise) => {
-    console.error('[Unhandled Rejection] at:', promise, 'reason:', reason);
-  });
-
-  process.on('uncaughtException', (err) => {
-    console.error('[Uncaught Exception] thrown:', err);
-    process.exit(1);
+  process.on('unhandledRejection', (reason) => {
+    console.error('[Unhandled Rejection]', reason);
   });
 
   // Verify token
   let token = process.env.DISCORD_TOKEN;
   if (!token) {
-    console.error('❌ DISCORD_TOKEN is missing in environment variables!');
+    console.error('❌ DISCORD_TOKEN is missing!');
     process.exit(1);
   }
-  token = token.trim(); // Remove any hidden spaces/newlines (common when pasting to Render)
+  token = token.trim();
 
-  // Token format check (Basic validation)
-  if (token.length < 50) {
-    console.warn(`⚠️ Token seems unusually short (${token.length} chars). Please double check it!`);
+  // Login with retry logic for rate limits (429)
+  async function loginWithRetry(maxRetries = 5) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[Login] Attempt ${attempt}/${maxRetries}...`);
+        await client.login(token);
+        console.log('[Login] ✅ Connected to Discord!');
+        return;
+      } catch (err) {
+        console.error(`[Login] ❌ Attempt ${attempt} failed: ${err.message}`);
+        if (attempt < maxRetries) {
+          // Wait longer each retry (30s, 60s, 90s, 120s, ...)
+          const waitSec = attempt * 30;
+          console.log(`[Login] Waiting ${waitSec}s before retry...`);
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+        } else {
+          console.error('[Login] All attempts failed. Exiting.');
+          process.exit(1);
+        }
+      }
+    }
   }
 
-  console.log('[Login] Attempting to connect to Discord...');
-  client.login(token).then(() => {
-    console.log('[Login] Login successful (Promise resolved)');
-  }).catch(err => {
-    console.error('❌ Failed to login to Discord:', err.message);
-    process.exit(1);
-  });
+  await loginWithRetry();
 }
 
 main().catch(err => {
-  console.error('❌ Main loop error:', err);
+  console.error('❌ Main error:', err);
   process.exit(1);
 });
