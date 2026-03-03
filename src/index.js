@@ -109,6 +109,12 @@ async function main() {
   // Error & Debug logging
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
+  client.on('debug', (info) => {
+    // Only log important debug info to avoid spam
+    if (info.includes('WebSocket') || info.includes('Ready') || info.includes('Connect')) {
+      console.log('[Debug]', info);
+    }
+  });
   client.on('shardReady', (id) => console.log(`[Shard ${id}] Shard is ready!`));
   client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected:`, event));
   client.on('shardReconnecting', (id) => console.log(`[Shard ${id}] Reconnecting...`));
@@ -123,11 +129,12 @@ async function main() {
   });
 
   // Verify token
-  const token = process.env.DISCORD_TOKEN;
+  let token = process.env.DISCORD_TOKEN;
   if (!token) {
     console.error('❌ DISCORD_TOKEN is missing in environment variables!');
     process.exit(1);
   }
+  token = token.trim(); // Remove any hidden spaces/newlines (common when pasting to Render)
 
   // Token format check (Basic validation)
   if (token.length < 50) {
