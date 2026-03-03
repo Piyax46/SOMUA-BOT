@@ -11,11 +11,17 @@ const os = require('os');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-// Get yt-dlp binary path
-const ytdlpPath = path.join(
+// Get yt-dlp binary path (cross-platform)
+let ytdlpPath = path.join(
     path.dirname(require.resolve('youtube-dl-exec')),
-    '..', 'bin', 'yt-dlp.exe'
+    '..', 'bin',
+    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
 );
+
+// Fallback to 'yt-dlp' from PATH if package binary is not found (common on some Linux setups)
+if (!fs.existsSync(ytdlpPath)) {
+    ytdlpPath = 'yt-dlp';
+}
 
 const ffmpegPath = require('ffmpeg-static');
 const tmpDir = path.join(os.tmpdir(), 'somua-bot');
