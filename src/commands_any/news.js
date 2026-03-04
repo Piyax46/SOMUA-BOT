@@ -1,5 +1,5 @@
 const { searchNews } = require('../services/search');
-const { createNewsEmbed, createErrorEmbed } = require('../utils/embed');
+const { createNewsEmbed, createErrorEmbed } = require('../utils_any/embed');
 
 async function execute(message, args) {
     const topic = args.join(' ');

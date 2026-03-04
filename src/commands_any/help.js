@@ -1,4 +1,4 @@
-const { createHelpEmbed } = require('../utils/embed');
+const { createHelpEmbed } = require('../utils_any/embed');
 
 async function execute(message) {
     const embed = createHelpEmbed();

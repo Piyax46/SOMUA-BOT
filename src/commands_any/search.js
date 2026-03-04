@@ -1,5 +1,5 @@
 const { searchGoogle } = require('../services/search');
-const { createSearchEmbed, createErrorEmbed } = require('../utils/embed');
+const { createSearchEmbed, createErrorEmbed } = require('../utils_any/embed');
 
 async function execute(message, args) {
     const query = args.join(' ');

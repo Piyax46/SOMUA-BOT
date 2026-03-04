@@ -1,5 +1,5 @@
 const { getRandomMenu } = require('../data/menus');
-const { createFoodEmbed } = require('../utils/embed');
+const { createFoodEmbed } = require('../utils_any/embed');
 
 async function execute(message) {
     const menu = getRandomMenu();

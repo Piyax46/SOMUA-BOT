@@ -55,6 +55,22 @@ async function main() {
     }
   }
 
+  // Load AnyBot Commands (!search, !news, !food)
+  const anyCommandsPath = path.join(__dirname, 'commands_any');
+  if (fs.existsSync(anyCommandsPath)) {
+    const anyCommandFiles = fs.readdirSync(anyCommandsPath).filter(f => f.endsWith('.js') && f !== 'handler.js');
+    for (const file of anyCommandFiles) {
+      const command = require(path.join(anyCommandsPath, file));
+      if (command.name) {
+        // AnyBot commands use raw message, so we'll wrap them or handle them separately
+        // For simplicity, we'll store them in a separate collection if they don't match our adapter style
+        if (!client.commands.has(command.name)) {
+          client.commands.set(command.name, { ...command, isAnyBot: true });
+        }
+      }
+    }
+  }
+
   // Per-guild music queues
   client.queues = new Map();
 
@@ -66,14 +82,14 @@ async function main() {
 
   // --- Unified Message Handler (Music + AI Chat) ---
   client.on(Events.MessageCreate, async (message) => {
-    // 1. Ignore own messages (unless it's the bridge - but here we handle it internally)
-    if (message.author.id === client.user.id) return;
-    if (message.author.bot && message.author.id !== client.user.id) {
-      // Only listen to other bots if they use the special /bridge format?
-      // For now, let's keep it simple.
-    }
+    // 1. Ignore own messages (EXCEPT for the internal bridge /play command)
+    const isBotSelf = message.author.id === client.user.id;
+    const isBridgeCmd = message.content.startsWith('/play');
 
-    // 2. Handle Music Commands (Prefix: !play, !np, etc.)
+    if (isBotSelf && !isBridgeCmd) return;
+    if (message.author.bot && !isBotSelf) return; // Ignore other bots
+
+    // 2. Handle Music/AI Commands (Prefix: !play, !np, !search, etc.)
     if (message.content.startsWith(PREFIX)) {
       const args = message.content.slice(PREFIX.length).trim().split(/ +/);
       const commandName = args.shift().toLowerCase();
@@ -81,9 +97,14 @@ async function main() {
 
       if (command) {
         try {
-          const adapter = new MessageAdapter(message);
-          await command.execute(adapter, args);
-          return; // Exit after command handled
+          if (command.isAnyBot) {
+            // These commands expect raw message
+            await command.execute(message, args);
+          } else {
+            const adapter = new MessageAdapter(message);
+            await command.execute(adapter, args);
+          }
+          return;
         } catch (error) {
           console.error(`Error executing ${commandName}:`, error);
           message.reply('❌ เกิดข้อผิดพลาดในการรันคำสั่ง!');
@@ -91,12 +112,17 @@ async function main() {
       }
     }
 
-    // 3. Handle Special Bridge Command (/play) - Can be triggered by AI or Users
-    if (message.content.startsWith('/play')) {
+    // 3. Handle Special Bridge Command (/play) - Triggered by the bot's own AI reply
+    if (isBridgeCmd) {
       const args = message.content.slice(5).trim().split(/ +/);
       const command = client.commands.get('play');
       if (command) {
         try {
+          // IMPORTANT: If the bot is sending this, we need to handle "who" the command is for.
+          // In the case of the AI bridge, the bot sends '/play song' AFTER replying to a user.
+          // But since it's the bot's own message, it has no 'member' (voice channel).
+          // We solve this by making the AI handler call the command directly using the ORIGINAL user's message context.
+          // So this block is mostly for users typing /play manually.
           const adapter = new MessageAdapter(message);
           await command.execute(adapter, args);
           return;
@@ -104,8 +130,8 @@ async function main() {
       }
     }
 
-    // 4. Handle AI Chat (If in designated channel)
-    if (CHAT_CHANNEL_ID && message.channel.id === CHAT_CHANNEL_ID) {
+    // 4. Handle AI Chat (If in designated channel and NOT a command)
+    if (!isBotSelf && CHAT_CHANNEL_ID && message.channel.id === CHAT_CHANNEL_ID) {
       try {
         await message.channel.sendTyping();
         let response = await chat(message.author.id, message.content);
@@ -115,22 +141,27 @@ async function main() {
         const match = response.match(commandRegex);
 
         if (match) {
-          const botCommand = match[1].trim();
-          // Remove the command tag from the visible AI response
+          const botCommand = match[1].trim(); // "/play song name"
+          const query = botCommand.replace(/^\/play\s+/, '').split(/ +/);
+
+          // Remove the command tag from the assistant's response
           response = response.replace(commandRegex, '').trim();
 
           // Send the ai reply
           if (response) await message.reply(response);
 
-          // Trigger the music command by sending it as the bot (the bridge)
-          // Since we listen for '/play' above, sending it to the channel will trigger step 3
-          await message.channel.send(botCommand);
+          // DIRECT EXECUTION: Don't just send message, execute it using the USER's message context
+          // This ensures the bot knows which voice channel to join (the user's)
+          const playCmd = client.commands.get('play');
+          if (playCmd) {
+            const adapter = new MessageAdapter(message); // Wrap original user message
+            await playCmd.execute(adapter, query);
+          }
         } else {
           await message.reply(response);
         }
       } catch (error) {
         console.error('Chat error:', error);
-        // Silent error to avoid spamming chat if AI fails
       }
     }
   });
