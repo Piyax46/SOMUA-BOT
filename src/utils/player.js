@@ -35,18 +35,20 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 
 async function downloadAudio(url, outputPath) {
     return new Promise((resolve, reject) => {
-        // Use yt-dlp to download audio, then ffmpeg converts to mp3
         // Add cookies if file exists
         const ytdlpArgs = [
             url,
-            '-f', 'ba/b',
+            '--format', 'bestaudio/best',
             '--quiet',
             '--no-warnings',
             '--no-check-certificates',
+            '--no-playlist',
+            '--no-cache-dir',
             '--extract-audio',
             '--audio-format', 'mp3',
             '--audio-quality', '0',
             '--ffmpeg-location', path.dirname(ffmpegPath),
+            '--force-overwrites',
             '-o', outputPath,
         ];
 
