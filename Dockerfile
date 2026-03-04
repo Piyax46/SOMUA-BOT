@@ -19,4 +19,5 @@ RUN npm install
 COPY . .
 
 # ⚠️ คำสั่งรันบอท (แก้ "index.js" ให้ตรงกับชื่อไฟล์ที่คุณใช้รันบอทจริงๆ นะครับ)
-CMD ["node", "index.js"]
+
+CMD ["node", "src/index.js"]
