@@ -4,10 +4,6 @@ FROM node:20-bookworm-slim
 # ติดตั้ง ffmpeg, python3 และ curl ให้ตัว OS
 RUN apt-get update && apt-get install -y ffmpeg python3 curl
 
-# โหลด yt-dlp แบบเจาะจง เพื่อแก้ปัญหาหา python ไม่เจอ
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
-RUN chmod a+rx /usr/local/bin/yt-dlp
-
 # ตั้งค่าพื้นที่ทำงาน
 WORKDIR /app
 
