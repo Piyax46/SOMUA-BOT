@@ -36,19 +36,18 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 async function downloadAudio(url, outputPath) {
     return new Promise((resolve, reject) => {
         // Add cookies if file exists
+        // simplified format to avoid errors on some videos
         const ytdlpArgs = [
             url,
-            '--format', 'bestaudio/best',
+            '--format', 'bestaudio',
             '--quiet',
             '--no-warnings',
             '--no-check-certificates',
             '--no-playlist',
-            '--no-cache-dir',
             '--extract-audio',
             '--audio-format', 'mp3',
             '--audio-quality', '0',
             '--ffmpeg-location', path.dirname(ffmpegPath),
-            '--force-overwrites',
             '-o', outputPath,
         ];
 
