@@ -6,6 +6,7 @@ const {
     StreamType,
 } = require('@discordjs/voice');
 const play = require('play-dl');
+const ytdl = require('@distube/ytdl-core');
 const path = require('path');
 const fs = require('fs');
 const { deleteQueue } = require('./queue');
@@ -15,6 +16,7 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 
 // Global flag to track if play-dl is initialized
 let playDlInitialized = false;
+let cookieHeader = '';
 
 function parseNetscapeCookies(content) {
     return content.split('\n')
@@ -39,17 +41,15 @@ async function initPlayDl() {
         if (fs.existsSync(cookiesPath)) {
             console.log('[Player] Parsing cookies.txt (Netscape format)');
             const rawContent = fs.readFileSync(cookiesPath, 'utf8');
-            const cookieString = parseNetscapeCookies(rawContent);
+            cookieHeader = parseNetscapeCookies(rawContent);
 
-            if (cookieString) {
+            if (cookieHeader) {
                 console.log('[Player] Loading parsed cookies into play-dl');
                 await play.setToken({
                     youtube: {
-                        cookie: cookieString
+                        cookie: cookieHeader
                     }
                 });
-            } else {
-                console.warn('[Player] cookies.txt exists but yielded no valid cookies');
             }
         }
         playDlInitialized = true;
@@ -68,6 +68,7 @@ async function playSong(client, guildId) {
     }
 
     const song = queue.songs[0];
+    const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
     try {
         await initPlayDl();
@@ -77,21 +78,45 @@ async function playSong(client, guildId) {
             throw new Error('Invalid song URL');
         }
 
-        // Get stream from play-dl
-        const stream = await play.stream(song.url, {
-            quality: 2, // High quality audio
-            seek: 0
-        });
+        let stream;
+        let inputType;
 
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
+        try {
+            // Attempt 1: play-dl (Fastest)
+            console.log('[Player] Attempting play-dl stream...');
+            const playStream = await play.stream(song.url, {
+                quality: 2,
+                seek: 0,
+                userAgent: USER_AGENT
+            });
+            stream = playStream.stream;
+            inputType = playStream.type;
+        } catch (err) {
+            console.warn(`[Player] play-dl failed (${err.message}). Falling back to ytdl-core...`);
+
+            // Attempt 2: ytdl-core
+            stream = ytdl(song.url, {
+                filter: 'audioonly',
+                quality: 'highestaudio',
+                highWaterMark: 1 << 25,
+                requestOptions: {
+                    headers: {
+                        'Cookie': cookieHeader,
+                        'User-Agent': USER_AGENT
+                    }
+                }
+            });
+            inputType = StreamType.Arbitrary;
+        }
+
+        const resource = createAudioResource(stream, {
+            inputType: inputType,
             inlineVolume: true,
         });
 
         resource.volume.setVolume(queue.volume / 100);
         queue.resource = resource;
 
-        // Create player if needed
         if (!queue.player) {
             queue.player = createAudioPlayer({
                 behaviors: {
@@ -119,19 +144,17 @@ async function playSong(client, guildId) {
             });
 
             queue.connection.subscribe(queue.player);
-            console.log('[Player] Player subscribed to connection');
         }
 
         queue.player.play(resource);
         queue.playing = true;
-        console.log('[Player] Now playing!');
 
         if (queue.textChannel) {
             const embed = createNowPlayingEmbed(song);
             queue.textChannel.send({ embeds: [embed] });
         }
     } catch (error) {
-        console.error('Error playing song:', error.message);
+        console.error('Final playback error:', error.message);
         if (queue.textChannel) {
             queue.textChannel.send(`❌ ไม่สามารถเล่นเพลง **${song.title}** ได้ — ข้ามไปเพลงถัดไป\n*(Error: ${error.message})*`);
         }
