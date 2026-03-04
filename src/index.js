@@ -170,25 +170,27 @@ async function main() {
   client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
-    const command = client.commands.get(interaction.commandName);
-    if (!command) return;
-
-    const args = [];
-    const options = interaction.options;
-
-    if (options.getString('query')) args.push(options.getString('query'));
-    if (options.getInteger('page')) args.push(String(options.getInteger('page')));
-    if (options.getInteger('level') !== null && options.getInteger('level') !== undefined) args.push(String(options.getInteger('level')));
-    if (options.getInteger('position')) args.push(String(options.getInteger('position')));
+    const adapter = new MessageAdapter(interaction);
 
     try {
-      const adapter = new MessageAdapter(interaction);
-      // FIRST thing we do: Defer the reply to give us time for processing
+      // 1. ALWAYS defer immediately to prevent "Unknown Interaction"
+      // This gives the bot up to 15 minutes to process
       await adapter.deferIfNeeded();
 
       const command = client.commands.get(interaction.commandName);
-      if (!command) return;
+      if (!command) {
+        return await adapter.reply('❌ ไม่พบคำสั่งนี้!');
+      }
 
+      const args = [];
+      const options = interaction.options;
+
+      if (options.getString('query')) args.push(options.getString('query'));
+      if (options.getInteger('page')) args.push(String(options.getInteger('page')));
+      if (options.getInteger('level') !== null && options.getInteger('level') !== undefined) args.push(String(options.getInteger('level')));
+      if (options.getInteger('position')) args.push(String(options.getInteger('position')));
+
+      // 2. Execute command
       await command.execute(adapter, args);
     } catch (error) {
       console.error(`Error executing /${interaction.commandName}:`, error);
