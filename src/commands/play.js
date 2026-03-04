@@ -1,8 +1,13 @@
 const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
-const play = require('play-dl');
+const youtubedl = require('youtube-dl-exec');
+const YouTube = require('youtube-sr').default;
 const { getQueue } = require('../utils/queue');
 const { playSong } = require('../utils/player');
 const { createAddedToQueueEmbed, createErrorEmbed } = require('../utils/embed');
+
+function isYouTubeURL(str) {
+    return /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+/.test(str);
+}
 
 module.exports = {
     name: 'play',
@@ -14,14 +19,17 @@ module.exports = {
             return msg.reply({ embeds: [createErrorEmbed('คุณต้องอยู่ใน Voice Channel ก่อนนะ!')] });
         }
 
-        // Check bot permissions
+        // Check bot permissions in the voice channel
         const permissions = voiceChannel.permissionsFor(msg.client.user);
-        if (!permissions.has('Connect') || !permissions.has('Speak')) {
-            return msg.reply({ embeds: [createErrorEmbed('บอทไม่มีสิทธิ์ Connect หรือ Speak ในห้องนี้!')] });
+        if (!permissions.has('Connect')) {
+            return msg.reply({ embeds: [createErrorEmbed('บอทไม่มีสิทธิ์ **Connect** ใน Voice Channel นี้!')] });
+        }
+        if (!permissions.has('Speak')) {
+            return msg.reply({ embeds: [createErrorEmbed('บอทไม่มีสิทธิ์ **Speak** ใน Voice Channel นี้! ไปเพิ่ม permission ให้บอทก่อนนะ')] });
         }
 
         if (!args.length) {
-            return msg.reply({ embeds: [createErrorEmbed('กรุณาใส่ชื่อเพลงหรือ URL!')] });
+            return msg.reply({ embeds: [createErrorEmbed('กรุณาใส่ชื่อเพลงหรือ URL! เช่น `/play ชื่อเพลง`')] });
         }
 
         const query = args.join(' ');
@@ -31,22 +39,24 @@ module.exports = {
         try {
             let songInfo;
 
-            // Use play-dl for EVERYTHING (Search and URL validation)
-            const videoType = play.yt_validate(query);
-
-            if (videoType && videoType !== 'search') {
-                // It's a URL
-                const info = await play.video_basic_info(query);
+            if (isYouTubeURL(query)) {
+                // Use yt-dlp to get video info from URL
+                const info = await youtubedl(query, {
+                    dumpSingleJson: true,
+                    noCheckCertificates: true,
+                    noWarnings: true,
+                    skipDownload: true,
+                });
                 songInfo = {
-                    title: info.video_details.title,
-                    url: info.video_details.url,
-                    duration: info.video_details.durationInSec,
-                    thumbnail: info.video_details.thumbnails[0]?.url || null,
+                    title: info.title,
+                    url: info.webpage_url || info.original_url || query,
+                    duration: info.duration || 0,
+                    thumbnail: info.thumbnail || null,
                     requestedBy: msg.author,
                 };
             } else {
-                // It's a search query
-                const results = await play.search(query, { limit: 1, source: { youtube: 'video' } });
+                // Search YouTube using youtube-sr
+                const results = await YouTube.search(query, { limit: 1, type: 'video' });
                 if (!results.length) {
                     return msg.reply({ embeds: [createErrorEmbed(`ไม่พบผลลัพธ์สำหรับ: **${query}**`)] });
                 }
@@ -54,8 +64,8 @@ module.exports = {
                 songInfo = {
                     title: video.title,
                     url: video.url,
-                    duration: video.durationInSec,
-                    thumbnail: video.thumbnails[0]?.url || null,
+                    duration: Math.floor((video.duration || 0) / 1000),
+                    thumbnail: video.thumbnail?.url || null,
                     requestedBy: msg.author,
                 };
             }

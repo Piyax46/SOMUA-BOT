@@ -2,16 +2,15 @@ require('dotenv').config();
 
 // Pre-load sodium before anything else to ensure voice encryption works
 const sodium = require('libsodium-wrappers');
+const express = require('express');
 
 async function main() {
-  // Optional HTTP server for platforms that require port binding (Render, etc.)
-  if (process.env.PORT) {
-    const express = require('express');
-    const app = express();
-    app.get('/', (req, res) => res.send('Somua Bot is alive! 🎵'));
-    app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
-    app.listen(process.env.PORT, () => console.log(`[HTTP] Listening on port ${process.env.PORT}`));
-  }
+  // --- Express Health Check (for Platforms like Railway/Render) ---
+  const app = express();
+  const PORT = process.env.PORT || 3000;
+  app.get('/', (req, res) => res.send('Somua Bot (Music + AI) is alive! 🎵🤖'));
+  app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+  app.listen(PORT, () => console.log(`[HTTP] Health check listening on port ${PORT}`));
 
   console.log(`[System] Platform: ${process.platform} | Node: ${process.version}`);
 
@@ -19,10 +18,11 @@ async function main() {
   await sodium.ready;
   console.log('[Boot] Sodium encryption ready ✅');
 
-  const { Client, GatewayIntentBits, Collection } = require('discord.js');
+  const { Client, GatewayIntentBits, Collection, Events } = require('discord.js');
   const fs = require('fs');
   const path = require('path');
   const { MessageAdapter } = require('./utils/adapter');
+  const { chat } = require('./services/gemini');
 
   const client = new Client({
     intents: [
@@ -37,25 +37,8 @@ async function main() {
     },
   });
 
-  // YouTube Auth (Bypass "Sign in to confirm you're not a bot")
-  const play = require('play-dl');
-  if (process.env.YOUTUBE_COOKIES) {
-    try {
-      await play.setToken({
-        youtube: {
-          cookie: process.env.YOUTUBE_COOKIES,
-        },
-      });
-      console.log('[Auth] YouTube cookies loaded ✅');
-    } catch (err) {
-      console.error('[Auth] Failed to set YouTube cookies:', err.message);
-    }
-  } else {
-    console.warn('[Auth] No YOUTUBE_COOKIES found. Bot might be blocked by YouTube!');
-  }
-
   const PREFIX = process.env.BOT_PREFIX || '!';
-  const TRUSTED_BOT_ID = process.env.TRUSTED_BOT_ID;
+  const CHAT_CHANNEL_ID = process.env.CHAT_CHANNEL_ID;
 
   // Load commands
   client.commands = new Collection();
@@ -75,35 +58,85 @@ async function main() {
   // Per-guild music queues
   client.queues = new Map();
 
-  client.once('ready', () => {
-    console.log(`🎵 Somua Bot is online as ${client.user.tag}!`);
-    client.user.setActivity('!play | /play', { type: 2 });
+  client.once(Events.ClientReady, (c) => {
+    console.log(`🎵🤖 Somua Bot is online as ${c.user.tag}!`);
+    console.log(`📌 Chat listening in channel: ${CHAT_CHANNEL_ID || 'Not set'}`);
+    client.user.setActivity('!play | Ask me anything!', { type: 2 });
   });
 
-  // Handle prefix commands
-  client.on('messageCreate', async (message) => {
-    // Ignore other bots, UNLESS it's the trusted AnyBot
-    if (message.author.bot && message.author.id !== TRUSTED_BOT_ID) return;
+  // --- Unified Message Handler (Music + AI Chat) ---
+  client.on(Events.MessageCreate, async (message) => {
+    // 1. Ignore own messages (unless it's the bridge - but here we handle it internally)
+    if (message.author.id === client.user.id) return;
+    if (message.author.bot && message.author.id !== client.user.id) {
+      // Only listen to other bots if they use the special /bridge format?
+      // For now, let's keep it simple.
+    }
 
-    if (!message.content.startsWith(PREFIX)) return;
+    // 2. Handle Music Commands (Prefix: !play, !np, etc.)
+    if (message.content.startsWith(PREFIX)) {
+      const args = message.content.slice(PREFIX.length).trim().split(/ +/);
+      const commandName = args.shift().toLowerCase();
+      const command = client.commands.get(commandName);
 
-    const args = message.content.slice(PREFIX.length).trim().split(/ +/);
-    const commandName = args.shift().toLowerCase();
+      if (command) {
+        try {
+          const adapter = new MessageAdapter(message);
+          await command.execute(adapter, args);
+          return; // Exit after command handled
+        } catch (error) {
+          console.error(`Error executing ${commandName}:`, error);
+          message.reply('❌ เกิดข้อผิดพลาดในการรันคำสั่ง!');
+        }
+      }
+    }
 
-    const command = client.commands.get(commandName);
-    if (!command) return;
+    // 3. Handle Special Bridge Command (/play) - Can be triggered by AI or Users
+    if (message.content.startsWith('/play')) {
+      const args = message.content.slice(5).trim().split(/ +/);
+      const command = client.commands.get('play');
+      if (command) {
+        try {
+          const adapter = new MessageAdapter(message);
+          await command.execute(adapter, args);
+          return;
+        } catch (e) { console.error('Bridge play error:', e); }
+      }
+    }
 
-    try {
-      const adapter = new MessageAdapter(message);
-      await command.execute(adapter, args);
-    } catch (error) {
-      console.error(`Error executing ${commandName}:`, error);
-      message.reply('❌ เกิดข้อผิดพลาดในการรันคำสั่ง!');
+    // 4. Handle AI Chat (If in designated channel)
+    if (CHAT_CHANNEL_ID && message.channel.id === CHAT_CHANNEL_ID) {
+      try {
+        await message.channel.sendTyping();
+        let response = await chat(message.author.id, message.content);
+
+        // Bridge logic: Detect [[COMMAND]] /play ...
+        const commandRegex = /\[\[COMMAND\]\]\s*(\/\w+.*)/i;
+        const match = response.match(commandRegex);
+
+        if (match) {
+          const botCommand = match[1].trim();
+          // Remove the command tag from the visible AI response
+          response = response.replace(commandRegex, '').trim();
+
+          // Send the ai reply
+          if (response) await message.reply(response);
+
+          // Trigger the music command by sending it as the bot (the bridge)
+          // Since we listen for '/play' above, sending it to the channel will trigger step 3
+          await message.channel.send(botCommand);
+        } else {
+          await message.reply(response);
+        }
+      } catch (error) {
+        console.error('Chat error:', error);
+        // Silent error to avoid spamming chat if AI fails
+      }
     }
   });
 
   // Handle slash commands
-  client.on('interactionCreate', async (interaction) => {
+  client.on(Events.InteractionCreate, async (interaction) => {
     if (!interaction.isChatInputCommand()) return;
 
     const command = client.commands.get(interaction.commandName);
@@ -138,14 +171,12 @@ async function main() {
   client.on('error', (err) => console.error('[Client Error]', err));
   client.on('warn', (info) => console.warn('[Client Warn]', info));
   client.on('shardReady', (id) => console.log(`[Shard ${id}] Ready!`));
-  client.on('shardDisconnect', (event, id) => console.warn(`[Shard ${id}] Disconnected`));
-  client.on('shardReconnecting', (id) => console.log(`[Shard ${id}] Reconnecting...`));
 
   process.on('unhandledRejection', (reason) => {
     console.error('[Unhandled Rejection]', reason);
   });
 
-  // Verify token
+  // Token management
   let token = process.env.DISCORD_TOKEN;
   if (!token) {
     console.error('❌ DISCORD_TOKEN is missing!');
