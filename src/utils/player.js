@@ -16,16 +16,41 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 // Global flag to track if play-dl is initialized
 let playDlInitialized = false;
 
+function parseNetscapeCookies(content) {
+    return content.split('\n')
+        .map(line => line.trim())
+        .filter(line => line && !line.startsWith('#'))
+        .map(line => {
+            const parts = line.split('\t');
+            if (parts.length >= 7) {
+                const name = parts[5];
+                const value = parts[6];
+                return `${name}=${value}`;
+            }
+            return null;
+        })
+        .filter(item => item !== null)
+        .join('; ');
+}
+
 async function initPlayDl() {
     if (playDlInitialized) return;
     try {
         if (fs.existsSync(cookiesPath)) {
-            console.log('[Player] Loading cookies.txt into play-dl');
-            await play.setToken({
-                youtube: {
-                    cookie: fs.readFileSync(cookiesPath, 'utf8')
-                }
-            });
+            console.log('[Player] Parsing cookies.txt (Netscape format)');
+            const rawContent = fs.readFileSync(cookiesPath, 'utf8');
+            const cookieString = parseNetscapeCookies(rawContent);
+
+            if (cookieString) {
+                console.log('[Player] Loading parsed cookies into play-dl');
+                await play.setToken({
+                    youtube: {
+                        cookie: cookieString
+                    }
+                });
+            } else {
+                console.warn('[Player] cookies.txt exists but yielded no valid cookies');
+            }
         }
         playDlInitialized = true;
     } catch (err) {
