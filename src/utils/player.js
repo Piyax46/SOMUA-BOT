@@ -31,10 +31,13 @@ if (!fs.existsSync(tmpDir)) {
     fs.mkdirSync(tmpDir, { recursive: true });
 }
 
+const cookiesPath = path.join(process.cwd(), 'cookies.txt');
+
 async function downloadAudio(url, outputPath) {
     return new Promise((resolve, reject) => {
         // Use yt-dlp to download audio, then ffmpeg converts to mp3
-        const ytdlp = spawn(ytdlpPath, [
+        // Add cookies if file exists
+        const ytdlpArgs = [
             url,
             '-f', 'ba/b',
             '--quiet',
@@ -45,7 +48,14 @@ async function downloadAudio(url, outputPath) {
             '--audio-quality', '0',
             '--ffmpeg-location', path.dirname(ffmpegPath),
             '-o', outputPath,
-        ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        ];
+
+        if (fs.existsSync(cookiesPath)) {
+            console.log('[Player] Using cookies.txt for authentication');
+            ytdlpArgs.push('--cookies', cookiesPath);
+        }
+
+        const ytdlp = spawn(ytdlpPath, ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
         ytdlp.stderr.on('data', (d) => {
             const msg = d.toString().trim();
