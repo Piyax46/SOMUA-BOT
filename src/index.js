@@ -37,6 +37,23 @@ async function main() {
     },
   });
 
+  // YouTube Auth (Bypass "Sign in to confirm you're not a bot")
+  const play = require('play-dl');
+  if (process.env.YOUTUBE_COOKIES) {
+    try {
+      await play.setToken({
+        youtube: {
+          cookie: process.env.YOUTUBE_COOKIES,
+        },
+      });
+      console.log('[Auth] YouTube cookies loaded ✅');
+    } catch (err) {
+      console.error('[Auth] Failed to set YouTube cookies:', err.message);
+    }
+  } else {
+    console.warn('[Auth] No YOUTUBE_COOKIES found. Bot might be blocked by YouTube!');
+  }
+
   const PREFIX = process.env.BOT_PREFIX || '!';
   const TRUSTED_BOT_ID = process.env.TRUSTED_BOT_ID;
 
