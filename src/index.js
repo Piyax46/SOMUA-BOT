@@ -183,7 +183,12 @@ async function main() {
 
     try {
       const adapter = new MessageAdapter(interaction);
+      // FIRST thing we do: Defer the reply to give us time for processing
       await adapter.deferIfNeeded();
+
+      const command = client.commands.get(interaction.commandName);
+      if (!command) return;
+
       await command.execute(adapter, args);
     } catch (error) {
       console.error(`Error executing /${interaction.commandName}:`, error);

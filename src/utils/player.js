@@ -49,10 +49,10 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 
 async function downloadAudio(url, outputPath) {
     return new Promise((resolve, reject) => {
-        // Add cookies if file exists
+        // Use 'ba*' to find ANY available audio stream to prevent "format not available" errors
         const ytdlpArgs = [
             url,
-            '-f', 'ba/b',
+            '--format', 'ba*',
             '--quiet',
             '--no-warnings',
             '--no-check-certificates',
