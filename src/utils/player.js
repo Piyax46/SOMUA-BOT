@@ -12,15 +12,29 @@ const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
 // Get yt-dlp binary path (cross-platform)
-let ytdlpPath = path.join(
-    path.dirname(require.resolve('youtube-dl-exec')),
-    '..', 'bin',
-    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp'
-);
+let ytdlpPath = 'yt-dlp'; // Default to PATH
 
-// Fallback to 'yt-dlp' from PATH if package binary is not found (common on some Linux setups)
-if (!fs.existsSync(ytdlpPath)) {
-    ytdlpPath = 'yt-dlp';
+if (process.platform === 'win32') {
+    const pkgBin = path.join(
+        path.dirname(require.resolve('youtube-dl-exec')),
+        '..', 'bin', 'yt-dlp.exe'
+    );
+    if (fs.existsSync(pkgBin)) {
+        ytdlpPath = pkgBin;
+    }
+} else {
+    // On Linux (Railway), prefer the one installed to /usr/local/bin in Dockerfile
+    if (fs.existsSync('/usr/local/bin/yt-dlp')) {
+        ytdlpPath = '/usr/local/bin/yt-dlp';
+    } else {
+        const pkgBin = path.join(
+            path.dirname(require.resolve('youtube-dl-exec')),
+            '..', 'bin', 'yt-dlp'
+        );
+        if (fs.existsSync(pkgBin)) {
+            ytdlpPath = pkgBin;
+        }
+    }
 }
 
 const ffmpegPath = require('ffmpeg-static');
@@ -36,10 +50,9 @@ const cookiesPath = path.join(process.cwd(), 'cookies.txt');
 async function downloadAudio(url, outputPath) {
     return new Promise((resolve, reject) => {
         // Add cookies if file exists
-        // simplified format to avoid errors on some videos
         const ytdlpArgs = [
             url,
-            '--format', 'bestaudio',
+            '-f', 'ba/b',
             '--quiet',
             '--no-warnings',
             '--no-check-certificates',
@@ -56,6 +69,7 @@ async function downloadAudio(url, outputPath) {
             ytdlpArgs.push('--cookies', cookiesPath);
         }
 
+        console.log(`[Player] Using yt-dlp at: ${ytdlpPath}`);
         const ytdlp = spawn(ytdlpPath, ytdlpArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
         ytdlp.stderr.on('data', (d) => {
