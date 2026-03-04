@@ -38,6 +38,7 @@ async function main() {
   });
 
   const PREFIX = process.env.BOT_PREFIX || '!';
+  const TRUSTED_BOT_ID = process.env.TRUSTED_BOT_ID;
 
   // Load commands
   client.commands = new Collection();
@@ -64,7 +65,9 @@ async function main() {
 
   // Handle prefix commands
   client.on('messageCreate', async (message) => {
-    if (message.author.bot) return;
+    // Ignore other bots, UNLESS it's the trusted AnyBot
+    if (message.author.bot && message.author.id !== TRUSTED_BOT_ID) return;
+
     if (!message.content.startsWith(PREFIX)) return;
 
     const args = message.content.slice(PREFIX.length).trim().split(/ +/);
