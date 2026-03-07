@@ -41,7 +41,7 @@ async function playSong(client, guildId) {
         const cookiesFile = path.join(process.cwd(), 'cookies.txt');
         const ytdlpArgs = [
             song.url,
-            '-f', 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
+            '-f', 'bestaudio/best',
             '-o', '-',           // Output to stdout
             '--no-warnings',
             '--no-check-certificates',
