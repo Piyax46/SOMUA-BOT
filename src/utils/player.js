@@ -44,22 +44,18 @@ async function playSong(client, guildId) {
             throw new Error('Invalid song URL');
         }
 
-        // yt-dlp downloads audio and pipes to stdout → ffmpeg converts to opus → Discord
+        // yt-dlp: no format restriction, no cookies (IP mismatch causes issues), geo-bypass
         const ytdlpArgs = [
             song.url,
-            '-o', '-',                    // pipe to stdout
-            '-f', 'ba/b',                 // best audio, fallback to best anything
-            '--no-check-formats',         // don't verify formats before downloading
+            '-o', '-',
+            '--no-check-formats',
             '--no-playlist',
             '--no-warnings',
             '--force-ipv4',
-            '--extractor-args', 'youtube:player_client=web',
+            '--geo-bypass',
+            '--extractor-args', 'youtube:player_client=default,mweb',
             '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
         ];
-
-        if (hasCookies) {
-            ytdlpArgs.push('--cookies', cookiesFile);
-        }
 
         console.log('[Player] Starting yt-dlp → ffmpeg pipeline...');
 
