@@ -47,6 +47,10 @@ class MusicQueue {
         this.songs = [];
         this.playing = false;
         this.loop = false;
+        if (this.ffmpegProcess) {
+            this.ffmpegProcess.kill('SIGTERM');
+            this.ffmpegProcess = null;
+        }
         if (this.ytdlpProcess) {
             this.ytdlpProcess.kill('SIGTERM');
             this.ytdlpProcess = null;
