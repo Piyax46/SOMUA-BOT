@@ -33,10 +33,13 @@ function getStreamUrl(songUrl) {
     return new Promise((resolve, reject) => {
         const args = [
             '--get-url',
+            '-f', 'ba',               // best audio only
             songUrl,
             '--no-warnings',
             '--no-check-certificates',
             '--no-playlist',
+            '--force-ipv4',
+            '--extractor-args', 'youtube:player_client=android',
         ];
         if (hasCookies) args.push('--cookies', cookiesFile);
 
