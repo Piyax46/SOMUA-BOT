@@ -12,14 +12,23 @@ const axios = require('axios');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-// Piped API instances (public YouTube proxy — no IP blocking)
+// Piped API instances (public YouTube proxy)
 const PIPED_INSTANCES = [
-    'https://pipedapi.kavin.rocks',
-    'https://pipedapi.adminforge.de',
-    'https://pipedapi.in.projectsegfau.lt',
+    'https://pipedapi.leptons.xyz',
+    'https://pipedapi.reallyaweso.me',
+    'https://pipedapi.drgns.space',
+    'https://pipedapi.ducks.party',
+    'https://pipedapi.codespace.cz',
+    'https://watchapi.whatever.social',
+    'https://pipedapi.r4fo.com',
 ];
 
-// yt-dlp path (fallback)
+// Cobalt API (popular YouTube audio extraction service)
+const COBALT_INSTANCES = [
+    'https://api.cobalt.tools',
+];
+
+// yt-dlp path (last fallback)
 let ytDlpPath = '/usr/local/bin/yt-dlp';
 if (!fs.existsSync(ytDlpPath)) {
     try {
@@ -49,7 +58,37 @@ function extractVideoId(url) {
 }
 
 /**
- * Method 1: Get audio stream URL from Piped API (proxy — works from datacenter IPs)
+ * Method 1: Cobalt API
+ */
+async function getStreamUrlFromCobalt(videoUrl) {
+    for (const instance of COBALT_INSTANCES) {
+        try {
+            console.log(`[Player] Trying Cobalt: ${instance}...`);
+            const response = await axios.post(`${instance}/`, {
+                url: videoUrl,
+                downloadMode: 'audio',
+                audioFormat: 'opus',
+            }, {
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                },
+                timeout: 15000,
+            });
+
+            if (response.data?.url) {
+                console.log('[Player] Cobalt OK ✅');
+                return response.data.url;
+            }
+        } catch (err) {
+            console.warn(`[Player] Cobalt ${instance} failed:`, err.response?.status || err.message);
+        }
+    }
+    return null;
+}
+
+/**
+ * Method 2: Piped API
  */
 async function getStreamUrlFromPiped(videoId) {
     for (const instance of PIPED_INSTANCES) {
@@ -62,24 +101,22 @@ async function getStreamUrlFromPiped(videoId) {
             const audioStreams = response.data.audioStreams || [];
             if (audioStreams.length === 0) continue;
 
-            // Sort by quality (bitrate), pick the best
+            // Sort by bitrate, prefer opus
             audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-
-            // Prefer opus codec for Discord
             const opusStream = audioStreams.find(s => s.codec === 'opus');
             const bestStream = opusStream || audioStreams[0];
 
-            console.log(`[Player] Piped OK: ${bestStream.quality || 'audio'} (${bestStream.codec})`);
+            console.log(`[Player] Piped OK: ${bestStream.quality || 'audio'} ✅`);
             return bestStream.url;
         } catch (err) {
-            console.warn(`[Player] Piped ${instance} failed:`, err.message);
+            console.warn(`[Player] Piped ${instance} failed:`, err.response?.status || err.message);
         }
     }
     return null;
 }
 
 /**
- * Method 2: Get stream URL from yt-dlp (fallback)
+ * Method 3: yt-dlp (last resort)
  */
 function getStreamUrlFromYtdlp(songUrl) {
     return new Promise((resolve, reject) => {
@@ -107,7 +144,7 @@ function getStreamUrlFromYtdlp(songUrl) {
                 const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
                 resolve(urls[urls.length - 1]);
             } else {
-                reject(new Error(stderr.trim() || `yt-dlp exited with code ${code}`));
+                reject(new Error(stderr.trim().substring(0, 200) || `yt-dlp code ${code}`));
             }
         });
 
@@ -116,23 +153,28 @@ function getStreamUrlFromYtdlp(songUrl) {
 }
 
 /**
- * Get the best available stream URL using multiple methods
+ * Try all methods to get a stream URL
  */
 async function getStreamUrl(songUrl) {
-    // Try Piped API first (works from datacenter IPs)
     const videoId = extractVideoId(songUrl);
+
+    // 1. Cobalt API
+    const cobaltUrl = await getStreamUrlFromCobalt(songUrl);
+    if (cobaltUrl) return cobaltUrl;
+
+    // 2. Piped API
     if (videoId) {
         const pipedUrl = await getStreamUrlFromPiped(videoId);
         if (pipedUrl) return pipedUrl;
     }
 
-    // Fallback to yt-dlp
-    console.log('[Player] All Piped instances failed, trying yt-dlp...');
+    // 3. yt-dlp
+    console.log('[Player] All APIs failed, trying yt-dlp...');
     return await getStreamUrlFromYtdlp(songUrl);
 }
 
 /**
- * Stream audio through ffmpeg from a direct URL
+ * Stream audio through ffmpeg
  */
 function createFfmpegStream(directUrl) {
     const ffmpeg = spawn('ffmpeg', [
