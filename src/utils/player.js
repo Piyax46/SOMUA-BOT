@@ -38,7 +38,8 @@ async function playSong(client, guildId) {
         }
 
         // Use yt-dlp to pipe audio directly (most reliable method)
-        const ytdlpProcess = spawn(ytDlpPath, [
+        const cookiesFile = path.join(process.cwd(), 'cookies.txt');
+        const ytdlpArgs = [
             song.url,
             '-f', 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
             '-o', '-',           // Output to stdout
@@ -47,7 +48,16 @@ async function playSong(client, guildId) {
             '--prefer-free-formats',
             '--no-playlist',
             '--quiet',
-        ], {
+        ];
+
+        // Add cookies if file exists
+        const fs = require('fs');
+        if (fs.existsSync(cookiesFile)) {
+            ytdlpArgs.push('--cookies', cookiesFile);
+            console.log('[Player] Using cookies.txt for YouTube auth');
+        }
+
+        const ytdlpProcess = spawn(ytDlpPath, ytdlpArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
 
