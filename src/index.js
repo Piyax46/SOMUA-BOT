@@ -5,7 +5,7 @@ const sodium = require('libsodium-wrappers');
 const express = require('express');
 
 async function main() {
-  // --- Express Health Check (for Platforms like Railway/Render) ---
+  // --- Express Health Check (for Railway/Render) ---
   const app = express();
   const PORT = process.env.PORT || 3000;
   app.get('/', (req, res) => res.send('Somua Bot (Music + AI) is alive! 🎵🤖'));
@@ -23,6 +23,8 @@ async function main() {
   const path = require('path');
   const { MessageAdapter } = require('./utils/adapter');
   const { chat } = require('./services/gemini');
+  const { searchGoogle, searchNews } = require('./services/search');
+  const { createSearchEmbed, createNewsEmbed, createErrorEmbed: createErrorEmbedAny } = require('./utils_any/embed');
 
   const client = new Client({
     intents: [
@@ -62,8 +64,6 @@ async function main() {
     for (const file of anyCommandFiles) {
       const command = require(path.join(anyCommandsPath, file));
       if (command.name) {
-        // AnyBot commands use raw message, so we'll wrap them or handle them separately
-        // For simplicity, we'll store them in a separate collection if they don't match our adapter style
         if (!client.commands.has(command.name)) {
           client.commands.set(command.name, { ...command, isAnyBot: true });
         }
@@ -76,20 +76,16 @@ async function main() {
 
   client.once(Events.ClientReady, (c) => {
     console.log(`🎵🤖 Somua Bot is online as ${c.user.tag}!`);
-    console.log(`📌 Chat listening in channel: ${CHAT_CHANNEL_ID || 'Not set'}`);
-    client.user.setActivity('!play | Ask me anything!', { type: 2 });
+    console.log(`📌 Chat channel: ${CHAT_CHANNEL_ID || 'All channels (via @mention)'}`);
+    client.user.setActivity('!play | @ฉัน ถามอะไรก็ได้!', { type: 2 });
   });
 
-  // --- Unified Message Handler (Music + AI Chat) ---
+  // --- Unified Message Handler (Music + AI Chat + Bridge) ---
   client.on(Events.MessageCreate, async (message) => {
-    // 1. Ignore own messages (EXCEPT for the internal bridge /play command)
-    const isBotSelf = message.author.id === client.user.id;
-    const isBridgeCmd = message.content.startsWith('/play');
+    // Ignore all bots
+    if (message.author.bot) return;
 
-    if (isBotSelf && !isBridgeCmd) return;
-    if (message.author.bot && !isBotSelf) return; // Ignore other bots
-
-    // 2. Handle Music/AI Commands (Prefix: !play, !np, !search, etc.)
+    // 1. Handle Music/AI Commands (Prefix: !play, !np, !search, etc.)
     if (message.content.startsWith(PREFIX)) {
       const args = message.content.slice(PREFIX.length).trim().split(/ +/);
       const commandName = args.shift().toLowerCase();
@@ -98,7 +94,6 @@ async function main() {
       if (command) {
         try {
           if (command.isAnyBot) {
-            // These commands expect raw message
             await command.execute(message, args);
           } else {
             const adapter = new MessageAdapter(message);
@@ -112,52 +107,72 @@ async function main() {
       }
     }
 
-    // 3. Handle Special Bridge Command (/play) - Triggered by the bot's own AI reply
-    if (isBridgeCmd) {
-      const args = message.content.slice(5).trim().split(/ +/);
-      const command = client.commands.get('play');
-      if (command) {
-        try {
-          // IMPORTANT: If the bot is sending this, we need to handle "who" the command is for.
-          // In the case of the AI bridge, the bot sends '/play song' AFTER replying to a user.
-          // But since it's the bot's own message, it has no 'member' (voice channel).
-          // We solve this by making the AI handler call the command directly using the ORIGINAL user's message context.
-          // So this block is mostly for users typing /play manually.
-          const adapter = new MessageAdapter(message);
-          await command.execute(adapter, args);
-          return;
-        } catch (e) { console.error('Bridge play error:', e); }
-      }
-    }
+    // 2. Handle AI Chat
+    // Responds if: (a) in CHAT_CHANNEL_ID, or (b) @mention the bot, or (c) reply to the bot
+    const isMentioned = message.mentions.has(client.user);
+    const isReplyToBot = message.reference && (await message.channel.messages.fetch(message.reference.messageId).catch(() => null))?.author?.id === client.user.id;
+    const isChatChannel = CHAT_CHANNEL_ID && message.channel.id === CHAT_CHANNEL_ID;
+    const isCommand = message.content.startsWith(PREFIX);
 
-    // 4. Handle AI Chat (If in designated channel and NOT a command)
-    if (!isBotSelf && CHAT_CHANNEL_ID && message.channel.id === CHAT_CHANNEL_ID) {
+    if (!isCommand && (isChatChannel || isMentioned || isReplyToBot)) {
       try {
         await message.channel.sendTyping();
-        let response = await chat(message.author.id, message.content);
 
-        // Bridge logic: Detect [[COMMAND]] /play ...
-        const commandRegex = /\[\[COMMAND\]\]\s*(\/\w+.*)/i;
-        const match = response.match(commandRegex);
+        // Clean the message (remove bot mention)
+        let userMessage = message.content.replace(/<@!?\d+>/g, '').trim();
+        if (!userMessage) userMessage = 'สวัสดี';
 
-        if (match) {
-          const botCommand = match[1].trim(); // "/play song name"
-          const query = botCommand.replace(/^\/play\s+/, '').split(/ +/);
+        let response = await chat(message.author.id, userMessage);
 
-          // Remove the command tag from the assistant's response
-          response = response.replace(commandRegex, '').trim();
+        // --- Bridge: Detect [[PLAY]], [[SEARCH]], [[NEWS]] commands ---
+        const playRegex = /\[\[PLAY\]\]\s*(.+)/i;
+        const searchRegex = /\[\[SEARCH\]\]\s*(.+)/i;
+        const newsRegex = /\[\[NEWS\]\]\s*(.+)/i;
 
-          // Send the ai reply
+        const playMatch = response.match(playRegex);
+        const searchMatch = response.match(searchRegex);
+        const newsMatch = response.match(newsRegex);
+
+        if (playMatch) {
+          const songQuery = playMatch[1].trim();
+          // Remove command tag from AI response
+          response = response.replace(playRegex, '').trim();
           if (response) await message.reply(response);
 
-          // DIRECT EXECUTION: Don't just send message, execute it using the USER's message context
-          // This ensures the bot knows which voice channel to join (the user's)
+          // Execute play command using the user's message context
           const playCmd = client.commands.get('play');
           if (playCmd) {
-            const adapter = new MessageAdapter(message); // Wrap original user message
-            await playCmd.execute(adapter, query);
+            const adapter = new MessageAdapter(message);
+            await playCmd.execute(adapter, songQuery.split(/ +/));
+          }
+        } else if (searchMatch) {
+          const searchQuery = searchMatch[1].trim();
+          response = response.replace(searchRegex, '').trim();
+          if (response) await message.reply(response);
+
+          // Execute search directly
+          try {
+            const results = await searchGoogle(searchQuery);
+            const embed = createSearchEmbed(searchQuery, results);
+            await message.channel.send({ embeds: [embed] });
+          } catch (err) {
+            await message.channel.send({ embeds: [createErrorEmbedAny('ค้นหาไม่สำเร็จ ลองใหม่อีกทีนะ')] });
+          }
+        } else if (newsMatch) {
+          const newsQuery = newsMatch[1].trim();
+          response = response.replace(newsRegex, '').trim();
+          if (response) await message.reply(response);
+
+          // Execute news search directly
+          try {
+            const results = await searchNews(newsQuery);
+            const embed = createNewsEmbed(newsQuery, results);
+            await message.channel.send({ embeds: [embed] });
+          } catch (err) {
+            await message.channel.send({ embeds: [createErrorEmbedAny('ค้นหาข่าวไม่สำเร็จ ลองใหม่อีกที')] });
           }
         } else {
+          // Normal AI response
           await message.reply(response);
         }
       } catch (error) {
@@ -173,8 +188,6 @@ async function main() {
     const adapter = new MessageAdapter(interaction);
 
     try {
-      // 1. ALWAYS defer immediately to prevent "Unknown Interaction"
-      // This gives the bot up to 15 minutes to process
       await adapter.deferIfNeeded();
 
       const command = client.commands.get(interaction.commandName);
@@ -190,7 +203,6 @@ async function main() {
       if (options.getInteger('level') !== null && options.getInteger('level') !== undefined) args.push(String(options.getInteger('level')));
       if (options.getInteger('position')) args.push(String(options.getInteger('position')));
 
-      // 2. Execute command
       await command.execute(adapter, args);
     } catch (error) {
       console.error(`Error executing /${interaction.commandName}:`, error);

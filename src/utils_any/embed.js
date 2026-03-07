@@ -51,7 +51,7 @@ function createNewsEmbed(topic, results) {
                     .join('\n\n')
         )
         .setTimestamp()
-        .setFooter({ text: '📅 ข่าวภายใน 7 วันล่าสุด' });
+        .setFooter({ text: '📅 ข่าวภายใน 7 วันล่าสุด • Powered by Google Search' });
 
     return embed;
 }
@@ -80,12 +80,12 @@ function createFoodEmbed(menu) {
 function createHelpEmbed() {
     const embed = new EmbedBuilder()
         .setColor(COLORS.PRIMARY)
-        .setTitle('📖 AnyBot — คำสั่งทั้งหมด')
-        .setDescription('สวัสดี! ฉันคือ AnyBot 🤖 ช่วยเหลือได้หลายอย่าง!')
+        .setTitle('📖 Somua Bot — คำสั่งทั้งหมด')
+        .setDescription('สวัสดี! ฉันคือ Somua Bot 🤖 ช่วยเหลือได้หลายอย่าง!')
         .addFields(
             {
                 name: '💬 AI Chat',
-                value: 'พิมพ์ข้อความอะไรก็ได้ แล้วฉันจะตอบกลับด้วย AI!\nเช่น: `สวัสดี`, `อธิบาย quantum physics`',
+                value: '@mention บอท หรือ reply ข้อความบอท — ถามอะไรก็ตอบ!\nเช่น: `@SoMua สวัสดี`, `เปิดเพลงให้หน่อย`',
             },
             {
                 name: '🔍 !search <คำค้นหา>',
@@ -105,7 +105,7 @@ function createHelpEmbed() {
             }
         )
         .setTimestamp()
-        .setFooter({ text: 'AnyBot v1.0 — Powered by Gemini AI & Google Search' });
+        .setFooter({ text: 'Somua Bot v2.0 — Powered by Groq AI & Google Search' });
 
     return embed;
 }

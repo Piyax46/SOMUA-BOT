@@ -1,112 +1,169 @@
 const axios = require('axios');
-const Parser = require('rss-parser');
 
-const parser = new Parser({
-    customFields: {
-        item: ['source', 'pubDate'],
-    }
-});
+const GOOGLE_API_KEY = process.env.GOOGLE_SEARCH_API_KEY;
+const GOOGLE_CX = process.env.GOOGLE_SEARCH_CX;
 
 /**
- * Search the web using DuckDuckGo Html/Lite endpoint (Fast & Unblockable)
- * @param {string} query - Search query
- * @param {object} options - Additional options
- * @returns {Array} Search results
+ * Search the web — Strategy:
+ *   1. DuckDuckGo HTML (free, unlimited)
+ *   2. Google Custom Search API (fallback — 100/day free)
+ *   3. Wikipedia (last resort)
  */
 async function searchGoogle(query, options = {}) {
-    const items = [];
-    try {
-        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=th-th`;
+    const num = options.num || 5;
 
+    // === Attempt 1: DuckDuckGo HTML (unlimited, no API key) ===
+    const ddgResults = await searchDuckDuckGo(query, num);
+    if (ddgResults.length > 0) return ddgResults;
+
+    // === Attempt 2: Google Custom Search API (100/day free) ===
+    if (GOOGLE_API_KEY && GOOGLE_CX) {
         try {
-            // This time we use a GET request instead of POST with minimal headers.
+            console.log('[Search] DDG returned 0 results, trying Google API...');
+            const url = 'https://www.googleapis.com/customsearch/v1';
             const response = await axios.get(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-                }
+                params: {
+                    key: GOOGLE_API_KEY,
+                    cx: GOOGLE_CX,
+                    q: query,
+                    num: num,
+                    hl: 'th',
+                    gl: 'th',
+                },
+                timeout: 10000,
             });
 
-            // Use Cheerio to parse if duckduckgo html responded
-            const cheerio = require('cheerio');
-            const $ = cheerio.load(response.data);
+            const items = (response.data.items || []).map(item => ({
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet || 'ไม่มีคำอธิบาย',
+            }));
 
-            $('.result').each((i, el) => {
-                const titleElement = $(el).find('.result__title .result__a');
-                const snippetElement = $(el).find('.result__snippet');
-
-                if (titleElement.length > 0) {
-                    const title = titleElement.text().trim();
-                    let link = titleElement.attr('href');
-                    let snippet = snippetElement.text().trim() || 'ไม่มีคำอธิบาย';
-
-                    if (link && link.startsWith('//duckduckgo.com/l/?uddg=')) {
-                        link = decodeURIComponent(link.replace('//duckduckgo.com/l/?uddg=', ''));
-                        link = link.split('&rut=')[0];
-                    }
-
-                    if (link && link.startsWith('http')) {
-                        items.push({
-                            title,
-                            link: link.split('?')[0] + (link.split('?')[1] ? '?' + link.split('?')[1].replace(/&amp;/g, '&') : ''),
-                            snippet,
-                        });
-                    }
-                }
-            });
-        } catch (ddgError) {
-            console.warn('DuckDuckGo blocked the request:', ddgError.message, 'Falling back to Wikipedia...');
+            if (items.length > 0) return items;
+        } catch (err) {
+            console.warn('[Search] Google API failed:', err.response?.status, err.message);
         }
-
-        // Wikipedia fallback if DDG returned 0 items or failed
-        if (items.length === 0) {
-            // Fallback to Wikipedia search API if DuckDuckGo blocks parsing
-            const wikiUrl = `https://th.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json`;
-            const wikiRes = await axios.get(wikiUrl, {
-                headers: {
-                    'User-Agent': 'AnyBot/1.0 (https://discord.com; anybot@example.com) Axios/1.3'
-                }
-            });
-            const wikiItems = wikiRes.data.query?.search || [];
-
-            wikiItems.slice(0, options.num || 5).forEach(item => {
-                items.push({
-                    title: item.title + ' - Wikipedia',
-                    link: `https://th.wikipedia.org/wiki/${encodeURIComponent(item.title)}`,
-                    snippet: item.snippet.replace(/<[^>]*>?/gm, ''), // Remove HTML tags
-                });
-            });
-        }
-
-        return items.slice(0, options.num || 5);
-    } catch (error) {
-        console.error('Web Search Error (DDG/Wiki):', error.message);
-        throw new Error('SEARCH_FAILED');
     }
+
+    // === Attempt 3: Wikipedia (always works) ===
+    return await searchWikipedia(query, num);
 }
 
 /**
- * Search for recent news using Google News RSS (Extremely reliable)
- * @param {string} query - News topic
- * @returns {Array} News results
+ * DuckDuckGo HTML scraping (free, unlimited)
+ */
+async function searchDuckDuckGo(query, num = 5) {
+    const items = [];
+    try {
+        const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}&kl=th-th`;
+        const response = await axios.get(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; rv:109.0) Gecko/20100101 Firefox/115.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+            timeout: 10000,
+        });
+
+        const cheerio = require('cheerio');
+        const $ = cheerio.load(response.data);
+
+        $('.result').each((i, el) => {
+            if (items.length >= num) return false;
+            const titleElement = $(el).find('.result__title .result__a');
+            const snippetElement = $(el).find('.result__snippet');
+
+            if (titleElement.length > 0) {
+                const title = titleElement.text().trim();
+                let link = titleElement.attr('href');
+                let snippet = snippetElement.text().trim() || 'ไม่มีคำอธิบาย';
+
+                if (link && link.startsWith('//duckduckgo.com/l/?uddg=')) {
+                    link = decodeURIComponent(link.replace('//duckduckgo.com/l/?uddg=', ''));
+                    link = link.split('&rut=')[0];
+                }
+
+                if (link && link.startsWith('http')) {
+                    items.push({ title, link, snippet });
+                }
+            }
+        });
+    } catch (err) {
+        console.warn('[Search] DuckDuckGo failed:', err.message);
+    }
+    return items;
+}
+
+/**
+ * Wikipedia search API (always free, always works)
+ */
+async function searchWikipedia(query, num = 5) {
+    const items = [];
+    try {
+        const wikiUrl = `https://th.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&utf8=&format=json`;
+        const wikiRes = await axios.get(wikiUrl, {
+            headers: { 'User-Agent': 'SomuaBot/1.0' },
+            timeout: 10000,
+        });
+        const wikiItems = wikiRes.data.query?.search || [];
+        wikiItems.slice(0, num).forEach(item => {
+            items.push({
+                title: item.title + ' - Wikipedia',
+                link: `https://th.wikipedia.org/wiki/${encodeURIComponent(item.title)}`,
+                snippet: item.snippet.replace(/<[^>]*>?/gm, ''),
+            });
+        });
+    } catch (e) {
+        console.warn('[Search] Wikipedia fallback also failed:', e.message);
+    }
+    return items;
+}
+
+/**
+ * Search for recent news — Strategy:
+ *   1. DuckDuckGo (query + "ข่าวล่าสุด")
+ *   2. Google Custom Search API (dateRestrict=d7)
+ *   3. Wikipedia
  */
 async function searchNews(query) {
-    try {
-        const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=th&gl=TH&ceid=TH:th`;
-        const feed = await parser.parseURL(url);
+    const num = 5;
 
-        const items = feed.items || [];
+    // === Attempt 1: DuckDuckGo with news keywords ===
+    const ddgResults = await searchDuckDuckGo(query + ' ข่าวล่าสุด วันนี้', num);
+    if (ddgResults.length > 0) return ddgResults;
 
-        return items.slice(0, 5).map(item => ({
-            title: item.title,
-            link: item.link,
-            snippet: `${item.source || 'ข่าวล่าสุด'} • ${new Date(item.pubDate).toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}`,
-        }));
-    } catch (error) {
-        console.error('News RSS Error:', error.message);
-        // Fallback to web search if RSS fails
-        return searchGoogle(query + ' ข่าวล่าสุดอัพเดท', { num: 5 });
+    // === Attempt 2: Google Custom Search API with date filter ===
+    if (GOOGLE_API_KEY && GOOGLE_CX) {
+        try {
+            console.log('[News] DDG returned 0 results, trying Google API...');
+            const url = 'https://www.googleapis.com/customsearch/v1';
+            const response = await axios.get(url, {
+                params: {
+                    key: GOOGLE_API_KEY,
+                    cx: GOOGLE_CX,
+                    q: query + ' ข่าว',
+                    num: num,
+                    hl: 'th',
+                    gl: 'th',
+                    sort: 'date',
+                    dateRestrict: 'd7',
+                },
+                timeout: 10000,
+            });
+
+            const items = (response.data.items || []).map(item => ({
+                title: item.title,
+                link: item.link,
+                snippet: item.snippet || 'ข่าวล่าสุด',
+            }));
+
+            if (items.length > 0) return items;
+        } catch (err) {
+            console.warn('[News] Google API failed:', err.response?.status, err.message);
+        }
     }
+
+    // === Attempt 3: Just search Wikipedia ===
+    return await searchWikipedia(query, num);
 }
 
 module.exports = { searchGoogle, searchNews };
