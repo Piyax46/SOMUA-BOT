@@ -1,6 +1,5 @@
 const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
-const youtubedl = require('youtube-dl-exec');
-const YouTube = require('youtube-sr').default;
+const play = require('play-dl');
 const { getQueue } = require('../utils/queue');
 const { playSong } = require('../utils/player');
 const { createAddedToQueueEmbed, createErrorEmbed } = require('../utils/embed');
@@ -40,34 +39,55 @@ module.exports = {
             let songInfo;
 
             if (isYouTubeURL(query)) {
-                // Use yt-dlp to get video info from URL
-                const info = await youtubedl(query, {
-                    dumpSingleJson: true,
-                    noCheckCertificates: true,
-                    noWarnings: true,
-                    skipDownload: true,
-                });
+                // Use play-dl to get video info from URL
+
+                let info;
+                try {
+                    info = await play.video_info(query);
+                } catch (err) {
+                    console.error('[Play] Failed to get YouTube info:', err.message);
+                    return msg.reply({ embeds: [createErrorEmbed('ไม่สามารถดึงข้อมูลวิดีโอนี้ได้ (อาจถูก YouTube บล็อกหรือจำกัดอายุ)')] });
+                }
+
+                if (!info || !info.video_details) {
+                    return msg.reply({ embeds: [createErrorEmbed('ไม่พบข้อมูลเพลงจากลิงก์นี้')] });
+                }
+
                 songInfo = {
-                    title: info.title,
-                    url: info.webpage_url || info.original_url || query,
-                    duration: info.duration || 0,
-                    thumbnail: info.thumbnail || null,
+                    title: info.video_details.title,
+                    url: info.video_details.url,
+                    duration: info.video_details.durationInSec * 1000,
+                    thumbnail: info.video_details.thumbnails[0]?.url || null,
                     requestedBy: msg.author,
                 };
             } else {
-                // Search YouTube using youtube-sr
-                const results = await YouTube.search(query, { limit: 1, type: 'video' });
-                if (!results.length) {
-                    return msg.reply({ embeds: [createErrorEmbed(`ไม่พบผลลัพธ์สำหรับ: **${query}**`)] });
+                // Search SoundCloud using play-dl (Since YouTube blocks Railway datacenter IP)
+                console.log(`[Play] Searching SoundCloud for: ${query}`);
+                msg.channel.send(`🔍 *กำลังค้นหาเพลงจาก SoundCloud... (ใช้ฐานข้อมูล SoundCloud แทน YouTube เพื่อหลีกเลี่ยงการโดนบล็อค)*`).then(m => {
+                    setTimeout(() => m.delete().catch(() => { }), 5000);
+                });
+
+                try {
+                    // Search SoundCloud
+                    const results = await play.search(query, { source: { soundcloud: 'tracks' }, limit: 1 });
+
+                    if (!results || !results.length) {
+                        return msg.reply({ embeds: [createErrorEmbed('❌ ไม่พบเพลงนี้บน SoundCloud ลองหาเพลงอื่นดูนะ')] });
+                    }
+
+                    const track = results[0];
+                    songInfo = {
+                        title: track.name || track.title,
+                        url: track.url,
+                        duration: track.durationInSec * 1000,
+                        thumbnail: track.thumbnail || null,
+                        requestedBy: msg.author,
+                        source: 'soundcloud',
+                    };
+                } catch (err) {
+                    console.error('[Play] SoundCloud search error:', err.message);
+                    return msg.reply({ embeds: [createErrorEmbed('❌ เกิดข้อผิดพลาดในการค้นหาจาก SoundCloud')] });
                 }
-                const video = results[0];
-                songInfo = {
-                    title: video.title,
-                    url: video.url,
-                    duration: Math.floor((video.duration || 0) / 1000),
-                    thumbnail: video.thumbnail?.url || null,
-                    requestedBy: msg.author,
-                };
             }
 
             // Safety check

@@ -44,84 +44,33 @@ async function playSong(client, guildId) {
             throw new Error('Invalid song URL');
         }
 
-        // yt-dlp: no format restriction, no cookies (IP mismatch causes issues), geo-bypass
-        const ytdlpArgs = [
-            song.url,
-            '-o', '-',
-            '--no-check-formats',
-            '--no-playlist',
-            '--no-warnings',
-            '--force-ipv4',
-            '--geo-bypass',
-            '--extractor-args', 'youtube:player_client=default,mweb',
-            '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-        ];
+        // Use play-dl to get audio stream
+        const play = require('play-dl');
 
-        console.log('[Player] Starting yt-dlp → ffmpeg pipeline...');
-
-        // Spawn yt-dlp: downloads and pipes raw audio/video to stdout
-        const ytdlp = spawn(ytDlpPath, ytdlpArgs, {
-            stdio: ['ignore', 'pipe', 'pipe'],
-        });
-
-        // Spawn ffmpeg: takes yt-dlp output, extracts audio, encodes to opus
-        const ffmpeg = spawn('ffmpeg', [
-            '-i', 'pipe:0',              // read from stdin (yt-dlp output)
-            '-vn',                        // no video
-            '-acodec', 'libopus',
-            '-f', 'opus',
-            '-ar', '48000',
-            '-ac', '2',
-            '-b:a', '128k',
-            '-loglevel', 'error',
-            'pipe:1',                     // output to stdout
-        ], {
-            stdio: ['pipe', 'pipe', 'pipe'],
-        });
-
-        // Pipe: yt-dlp stdout → ffmpeg stdin
-        ytdlp.stdout.pipe(ffmpeg.stdin);
-
-        // Handle yt-dlp errors
-        ytdlp.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg && !msg.includes('[download]')) {
-                console.warn('[yt-dlp]', msg);
+        // Pass cookies to play-dl if playing YouTube
+        let stream;
+        try {
+            if (song.source === 'soundcloud' || !song.url.includes('youtube')) {
+                stream = await play.stream(song.url);
+            } else {
+                // Try playing YouTube
+                stream = await play.stream(song.url, {
+                    discordPlayerCompatibility: true
+                });
             }
-        });
+        } catch (err) {
+            console.error('[Player] Error getting stream:', err.message);
+            throw new Error('ไม่สามารถเล่นเพลงนี้ได้ (YouTube อาจบล็อค หรือวิดีโอถูกจำกัด)');
+        }
 
-        ytdlp.on('error', (err) => {
-            console.error('[yt-dlp process error]', err.message);
-        });
-
-        ytdlp.on('close', (code) => {
-            if (code && code !== 0) {
-                console.warn(`[yt-dlp] exited with code ${code}`);
-            }
-            // Close ffmpeg stdin when yt-dlp finishes
-            ffmpeg.stdin.end();
-        });
-
-        // Handle ffmpeg errors
-        ffmpeg.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg) console.warn('[ffmpeg]', msg);
-        });
-
-        ffmpeg.on('error', (err) => {
-            console.error('[ffmpeg process error]', err.message);
-        });
-
-        // Create audio resource from ffmpeg output
-        const resource = createAudioResource(ffmpeg.stdout, {
-            inputType: StreamType.OggOpus,
+        const resource = createAudioResource(stream.stream, {
+            inputType: stream.type,
             inlineVolume: true,
         });
 
         resource.volume.setVolume(queue.volume / 100);
         queue.resource = resource;
-        queue.ytdlpProcess = ytdlp;
-        queue.ffmpegProcess = ffmpeg;
+        queue.ffmpegProcess = null; // No ffmpeg process when using play-dl directly
 
         if (!queue.player) {
             queue.player = createAudioPlayer({
