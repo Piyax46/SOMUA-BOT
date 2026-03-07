@@ -12,35 +12,7 @@ const axios = require('axios');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-// Piped API instances (public YouTube proxy)
-const PIPED_INSTANCES = [
-    'https://pipedapi.leptons.xyz',
-    'https://pipedapi.reallyaweso.me',
-    'https://pipedapi.drgns.space',
-    'https://pipedapi.ducks.party',
-    'https://pipedapi.codespace.cz',
-    'https://watchapi.whatever.social',
-    'https://pipedapi.r4fo.com',
-];
-
-// Cobalt API (popular YouTube audio extraction service)
-const COBALT_INSTANCES = [
-    'https://api.cobalt.tools',
-];
-
-// yt-dlp path (last fallback)
-let ytDlpPath = '/usr/local/bin/yt-dlp';
-if (!fs.existsSync(ytDlpPath)) {
-    try {
-        ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
-    } catch {
-        ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
-    }
-}
-console.log(`[Player] yt-dlp path: ${ytDlpPath}`);
-
 const cookiesFile = path.join(process.cwd(), 'cookies.txt');
-const hasCookies = fs.existsSync(cookiesFile);
 
 /**
  * Extract YouTube video ID from URL
@@ -58,119 +30,194 @@ function extractVideoId(url) {
 }
 
 /**
- * Method 1: Cobalt API
+ * Parse cookies.txt into a cookie header string
  */
-async function getStreamUrlFromCobalt(videoUrl) {
-    for (const instance of COBALT_INSTANCES) {
-        try {
-            console.log(`[Player] Trying Cobalt: ${instance}...`);
-            const response = await axios.post(`${instance}/`, {
-                url: videoUrl,
-                downloadMode: 'audio',
-                audioFormat: 'opus',
-            }, {
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                },
-                timeout: 15000,
-            });
+function getCookieHeader() {
+    try {
+        if (!fs.existsSync(cookiesFile)) return '';
+        const content = fs.readFileSync(cookiesFile, 'utf8');
+        return content.split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#'))
+            .map(line => {
+                const parts = line.split('\t');
+                if (parts.length >= 7) return `${parts[5]}=${parts[6]}`;
+                return null;
+            })
+            .filter(Boolean)
+            .join('; ');
+    } catch { return ''; }
+}
 
-            if (response.data?.url) {
-                console.log('[Player] Cobalt OK ✅');
-                return response.data.url;
+const cookieHeader = getCookieHeader();
+if (cookieHeader) console.log('[Player] Cookies loaded ✅');
+
+/**
+ * Method 1: YouTube Innertube API (direct — most reliable)
+ * Uses the TV embedded player client which is less restricted
+ */
+async function getStreamUrlFromInnertube(videoId) {
+    // Try multiple client configurations
+    const clients = [
+        {
+            name: 'TV_EMBEDDED',
+            body: {
+                videoId,
+                context: {
+                    client: {
+                        clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+                        clientVersion: '2.0',
+                        hl: 'th',
+                        gl: 'TH',
+                    },
+                    thirdParty: {
+                        embedUrl: 'https://www.google.com',
+                    },
+                },
+            },
+            key: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+        },
+        {
+            name: 'ANDROID',
+            body: {
+                videoId,
+                context: {
+                    client: {
+                        clientName: 'ANDROID',
+                        clientVersion: '19.09.37',
+                        androidSdkVersion: 30,
+                        hl: 'th',
+                        gl: 'TH',
+                    },
+                },
+            },
+            key: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+        },
+        {
+            name: 'IOS',
+            body: {
+                videoId,
+                context: {
+                    client: {
+                        clientName: 'IOS',
+                        clientVersion: '19.09.3',
+                        deviceModel: 'iPhone14,3',
+                        hl: 'th',
+                        gl: 'TH',
+                    },
+                },
+            },
+            key: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+        },
+    ];
+
+    for (const client of clients) {
+        try {
+            console.log(`[Player] Trying Innertube ${client.name}...`);
+
+            const headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': client.name === 'IOS'
+                    ? 'com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)'
+                    : client.name === 'ANDROID'
+                        ? 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
+                        : 'Mozilla/5.0',
+            };
+
+            // Add cookies if available
+            if (cookieHeader) {
+                headers['Cookie'] = cookieHeader;
             }
+
+            const response = await axios.post(
+                `https://www.youtube.com/youtubei/v1/player?key=${client.key}&prettyPrint=false`,
+                client.body,
+                { headers, timeout: 15000 }
+            );
+
+            const data = response.data;
+
+            // Check for playability
+            if (data.playabilityStatus?.status !== 'OK') {
+                console.warn(`[Player] ${client.name}: ${data.playabilityStatus?.status} - ${data.playabilityStatus?.reason || 'unknown'}`);
+                continue;
+            }
+
+            // Get audio formats from adaptive formats
+            const formats = data.streamingData?.adaptiveFormats || [];
+            const audioFormats = formats.filter(f => f.mimeType && f.mimeType.startsWith('audio/'));
+
+            if (audioFormats.length === 0) {
+                console.warn(`[Player] ${client.name}: No audio formats found`);
+                continue;
+            }
+
+            // Sort by bitrate (highest first), prefer opus
+            audioFormats.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            const opusFormat = audioFormats.find(f => f.mimeType.includes('opus'));
+            const bestFormat = opusFormat || audioFormats[0];
+
+            const streamUrl = bestFormat.url || null;
+            if (!streamUrl) {
+                // Some formats use signatureCipher instead of direct URL
+                console.warn(`[Player] ${client.name}: Format has no direct URL (cipher protected)`);
+                continue;
+            }
+
+            console.log(`[Player] Innertube ${client.name} OK: ${bestFormat.mimeType} ${Math.round(bestFormat.bitrate / 1000)}kbps ✅`);
+            return streamUrl;
         } catch (err) {
-            console.warn(`[Player] Cobalt ${instance} failed:`, err.response?.status || err.message);
+            console.warn(`[Player] Innertube ${client.name} failed:`, err.response?.status || err.message);
         }
     }
+
     return null;
 }
 
 /**
- * Method 2: Piped API
+ * Method 2: Piped API instances (public YouTube proxy)
  */
 async function getStreamUrlFromPiped(videoId) {
-    for (const instance of PIPED_INSTANCES) {
-        try {
-            console.log(`[Player] Trying Piped: ${instance}...`);
-            const response = await axios.get(`${instance}/streams/${videoId}`, {
-                timeout: 10000,
-            });
+    const instances = [
+        'https://pipedapi.kavin.rocks',
+        'https://pipedapi.leptons.xyz',
+        'https://pipedapi.reallyaweso.me',
+        'https://pipedapi.drgns.space',
+    ];
 
+    for (const instance of instances) {
+        try {
+            const response = await axios.get(`${instance}/streams/${videoId}`, { timeout: 8000 });
             const audioStreams = response.data.audioStreams || [];
             if (audioStreams.length === 0) continue;
 
-            // Sort by bitrate, prefer opus
             audioStreams.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-            const opusStream = audioStreams.find(s => s.codec === 'opus');
-            const bestStream = opusStream || audioStreams[0];
-
-            console.log(`[Player] Piped OK: ${bestStream.quality || 'audio'} ✅`);
-            return bestStream.url;
+            const best = audioStreams.find(s => s.codec === 'opus') || audioStreams[0];
+            console.log(`[Player] Piped ${instance} OK ✅`);
+            return best.url;
         } catch (err) {
-            console.warn(`[Player] Piped ${instance} failed:`, err.response?.status || err.message);
+            // Silent fail, move to next
         }
     }
     return null;
 }
 
 /**
- * Method 3: yt-dlp (last resort)
- */
-function getStreamUrlFromYtdlp(songUrl) {
-    return new Promise((resolve, reject) => {
-        const args = [
-            '--get-url',
-            '-f', 'ba',
-            songUrl,
-            '--no-warnings',
-            '--no-check-certificates',
-            '--no-playlist',
-            '--force-ipv4',
-            '--extractor-args', 'youtube:player_client=mweb,android',
-        ];
-        if (hasCookies) args.push('--cookies', cookiesFile);
-
-        const proc = spawn(ytDlpPath, args);
-        let stdout = '';
-        let stderr = '';
-
-        proc.stdout.on('data', (d) => { stdout += d.toString(); });
-        proc.stderr.on('data', (d) => { stderr += d.toString(); });
-
-        proc.on('close', (code) => {
-            if (code === 0 && stdout.trim()) {
-                const urls = stdout.trim().split('\n').filter(u => u.startsWith('http'));
-                resolve(urls[urls.length - 1]);
-            } else {
-                reject(new Error(stderr.trim().substring(0, 200) || `yt-dlp code ${code}`));
-            }
-        });
-
-        proc.on('error', (err) => reject(err));
-    });
-}
-
-/**
- * Try all methods to get a stream URL
+ * Get the best available stream URL
  */
 async function getStreamUrl(songUrl) {
     const videoId = extractVideoId(songUrl);
+    if (!videoId) throw new Error('Cannot extract video ID from URL');
 
-    // 1. Cobalt API
-    const cobaltUrl = await getStreamUrlFromCobalt(songUrl);
-    if (cobaltUrl) return cobaltUrl;
+    // 1. YouTube Innertube API (direct, most reliable)
+    const innertubeUrl = await getStreamUrlFromInnertube(videoId);
+    if (innertubeUrl) return innertubeUrl;
 
-    // 2. Piped API
-    if (videoId) {
-        const pipedUrl = await getStreamUrlFromPiped(videoId);
-        if (pipedUrl) return pipedUrl;
-    }
+    // 2. Piped API (proxy)
+    const pipedUrl = await getStreamUrlFromPiped(videoId);
+    if (pipedUrl) return pipedUrl;
 
-    // 3. yt-dlp
-    console.log('[Player] All APIs failed, trying yt-dlp...');
-    return await getStreamUrlFromYtdlp(songUrl);
+    throw new Error('ไม่สามารถดึง URL เพลงได้จากทุกวิธี — YouTube อาจบล็อคเพลงนี้');
 }
 
 /**
@@ -290,10 +337,6 @@ function cleanupProcess(queue) {
     if (queue.ffmpegProcess) {
         queue.ffmpegProcess.kill('SIGTERM');
         queue.ffmpegProcess = null;
-    }
-    if (queue.ytdlpProcess) {
-        queue.ytdlpProcess.kill('SIGTERM');
-        queue.ytdlpProcess = null;
     }
 }
 
