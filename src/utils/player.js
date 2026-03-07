@@ -10,14 +10,18 @@ const path = require('path');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-// Find yt-dlp binary from youtube-dl-exec
-let ytDlpPath;
-try {
-    ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
-} catch {
-    // Fallback: try to find it in node_modules
-    ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+// Prefer system yt-dlp (installed via pip in Dockerfile — always latest)
+// Fallback to the one bundled with youtube-dl-exec
+const fs = require('fs');
+let ytDlpPath = '/usr/local/bin/yt-dlp'; // pip-installed (Linux/Docker)
+if (!fs.existsSync(ytDlpPath)) {
+    try {
+        ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
+    } catch {
+        ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+    }
 }
+console.log(`[Player] Using yt-dlp: ${ytDlpPath}`);
 
 async function playSong(client, guildId) {
     const queue = client.queues.get(guildId);

@@ -1,8 +1,10 @@
 # ใช้ Node.js เวอร์ชัน 20 เป็นแกนหลัก
 FROM node:20-bookworm-slim
 
-# ติดตั้ง ffmpeg, python3 และ curl ให้ตัว OS
-RUN apt-get update && apt-get install -y ffmpeg python3 curl
+# ติดตั้ง ffmpeg, python3, pip, curl, และ yt-dlp ล่าสุด
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip curl && \
+    pip3 install --break-system-packages yt-dlp && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ตั้งค่าพื้นที่ทำงาน
 WORKDIR /app
@@ -13,7 +15,5 @@ RUN npm install
 
 # ก๊อปปี้โค้ดทั้งหมดในโปรเจกต์เข้ามา
 COPY . .
-
-# ⚠️ คำสั่งรันบอท (แก้ "index.js" ให้ตรงกับชื่อไฟล์ที่คุณใช้รันบอทจริงๆ นะครับ)
 
 CMD ["node", "src/index.js"]
