@@ -5,57 +5,18 @@ const {
     NoSubscriberBehavior,
     StreamType,
 } = require('@discordjs/voice');
-const play = require('play-dl');
-const ytdl = require('@distube/ytdl-core');
+const { spawn } = require('child_process');
 const path = require('path');
-const fs = require('fs');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-const cookiesPath = path.join(process.cwd(), 'cookies.txt');
-
-// Global flag to track if play-dl is initialized
-let playDlInitialized = false;
-let cookieHeader = '';
-
-function parseNetscapeCookies(content) {
-    return content.split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'))
-        .map(line => {
-            const parts = line.split('\t');
-            if (parts.length >= 7) {
-                const name = parts[5];
-                const value = parts[6];
-                return `${name}=${value}`;
-            }
-            return null;
-        })
-        .filter(item => item !== null)
-        .join('; ');
-}
-
-async function initPlayDl() {
-    if (playDlInitialized) return;
-    try {
-        if (fs.existsSync(cookiesPath)) {
-            console.log('[Player] Parsing cookies.txt (Netscape format)');
-            const rawContent = fs.readFileSync(cookiesPath, 'utf8');
-            cookieHeader = parseNetscapeCookies(rawContent);
-
-            if (cookieHeader) {
-                console.log('[Player] Loading parsed cookies into play-dl');
-                await play.setToken({
-                    youtube: {
-                        cookie: cookieHeader
-                    }
-                });
-            }
-        }
-        playDlInitialized = true;
-    } catch (err) {
-        console.error('[Player] Failed to initialize play-dl with cookies:', err.message);
-    }
+// Find yt-dlp binary from youtube-dl-exec
+let ytDlpPath;
+try {
+    ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
+} catch {
+    // Fallback: try to find it in node_modules
+    ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
 }
 
 async function playSong(client, guildId) {
@@ -68,54 +29,50 @@ async function playSong(client, guildId) {
     }
 
     const song = queue.songs[0];
-    const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
     try {
-        await initPlayDl();
         console.log(`[Player] Streaming: ${song.title} | URL: ${song.url}`);
 
         if (!song.url || song.url === 'undefined') {
             throw new Error('Invalid song URL');
         }
 
-        let stream;
-        let inputType;
+        // Use yt-dlp to pipe audio directly (most reliable method)
+        const ytdlpProcess = spawn(ytDlpPath, [
+            song.url,
+            '-f', 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
+            '-o', '-',           // Output to stdout
+            '--no-warnings',
+            '--no-check-certificates',
+            '--prefer-free-formats',
+            '--no-playlist',
+            '--quiet',
+        ], {
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
 
-        try {
-            // Attempt 1: play-dl (Fastest)
-            console.log('[Player] Attempting play-dl stream...');
-            const playStream = await play.stream(song.url, {
-                quality: 2,
-                seek: 0,
-                userAgent: USER_AGENT
-            });
-            stream = playStream.stream;
-            inputType = playStream.type;
-        } catch (err) {
-            console.warn(`[Player] play-dl failed (${err.message}). Falling back to ytdl-core...`);
+        // Log stderr for debugging (but don't crash)
+        ytdlpProcess.stderr.on('data', (data) => {
+            const msg = data.toString().trim();
+            if (msg) console.warn('[yt-dlp stderr]', msg);
+        });
 
-            // Attempt 2: ytdl-core
-            stream = ytdl(song.url, {
-                filter: 'audioonly',
-                quality: 'highestaudio',
-                highWaterMark: 1 << 25,
-                requestOptions: {
-                    headers: {
-                        'Cookie': cookieHeader,
-                        'User-Agent': USER_AGENT
-                    }
-                }
-            });
-            inputType = StreamType.Arbitrary;
-        }
+        ytdlpProcess.on('error', (err) => {
+            console.error('[yt-dlp process error]', err.message);
+        });
+
+        const stream = ytdlpProcess.stdout;
 
         const resource = createAudioResource(stream, {
-            inputType: inputType,
+            inputType: StreamType.Arbitrary,
             inlineVolume: true,
         });
 
         resource.volume.setVolume(queue.volume / 100);
         queue.resource = resource;
+
+        // Store the yt-dlp process so we can kill it on skip/stop
+        queue.ytdlpProcess = ytdlpProcess;
 
         if (!queue.player) {
             queue.player = createAudioPlayer({
@@ -126,6 +83,11 @@ async function playSong(client, guildId) {
 
             queue.player.on('error', (error) => {
                 console.error('Audio player error:', error.message);
+                // Kill the yt-dlp process
+                if (queue.ytdlpProcess) {
+                    queue.ytdlpProcess.kill('SIGTERM');
+                    queue.ytdlpProcess = null;
+                }
                 if (queue.textChannel) {
                     queue.textChannel.send(`❌ เกิดข้อผิดพลาดในการเล่นเพลง: ${song.title}`);
                 }
@@ -135,6 +97,11 @@ async function playSong(client, guildId) {
 
             queue.player.on(AudioPlayerStatus.Idle, () => {
                 console.log('[Player] Song finished (idle)');
+                // Clean up yt-dlp process
+                if (queue.ytdlpProcess) {
+                    queue.ytdlpProcess.kill('SIGTERM');
+                    queue.ytdlpProcess = null;
+                }
                 if (queue.loop) {
                     playSong(client, guildId);
                 } else {
