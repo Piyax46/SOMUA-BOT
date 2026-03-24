@@ -51,6 +51,7 @@ async function getAudioUrl(url, useCookies = hasCookies) {
         const args = [
             '--no-playlist',
             '-f', 'bestaudio/best', // The most robust format selection
+            '--extractor-args', 'youtube:player_client=android', // Bypass YouTube bot checks
             '-g', // Print URL only, don't download
             '--no-warnings',
             '--no-check-certificates',
