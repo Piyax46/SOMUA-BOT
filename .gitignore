@@ -5,3 +5,5 @@ dist/
 *.mp3
 *.wav
 *.ogg
+cookies.txt
+yt-dlp.exe

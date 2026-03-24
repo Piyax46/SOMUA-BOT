@@ -1,7 +1,13 @@
 const Groq = require('groq-sdk');
 
-// Use Groq (Llama 3.3 70B) — ฟรี, เร็ว
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+// Use Groq (Llama 3.3 70B) — ฟรี, เร็ว (lazy init to avoid crash on import)
+let groq = null;
+function getGroq() {
+    if (!groq) {
+        groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+    }
+    return groq;
+}
 
 const SYSTEM_PROMPT = `คุณชื่อ SoMua Bot เป็น AI Chatbot อัจฉริยะที่คอยช่วยเหลือผู้ใช้ใน Discord
 - หน้าที่ของคุณคือให้คำตอบที่ "ถูกต้อง แม่นยำ และตรงคำถามที่สุด"
@@ -51,7 +57,7 @@ async function chat(userId, message) {
       history = history.slice(-MAX_HISTORY);
     }
 
-    const completion = await groq.chat.completions.create({
+    const completion = await getGroq().chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },

@@ -19,7 +19,7 @@ module.exports = {
             .setThumbnail(song.thumbnail)
             .addFields(
                 { name: '⏱️ ความยาว', value: formatDuration(song.duration), inline: true },
-                { name: '👤 ขอเพลงโดย', value: `${song.requestedBy}`, inline: true },
+                { name: '👤 ขอเพลงโดย', value: `${song.requestedBy?.displayName || song.requestedBy?.username || song.requestedBy || 'ไม่ทราบ'}`, inline: true },
                 { name: '🔊 Volume', value: `${queue.volume}%`, inline: true },
                 { name: '🔁 Loop', value: queue.loop ? 'เปิด' : 'ปิด', inline: true },
                 { name: '📋 เพลงในคิว', value: `${queue.queueLength} เพลง`, inline: true },

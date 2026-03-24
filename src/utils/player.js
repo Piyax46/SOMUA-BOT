@@ -11,20 +11,126 @@ const fs = require('fs');
 const { deleteQueue } = require('./queue');
 const { createNowPlayingEmbed } = require('./embed');
 
-// yt-dlp path
-let ytDlpPath = '/usr/local/bin/yt-dlp';
-if (!fs.existsSync(ytDlpPath)) {
-    try {
-        ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
-    } catch {
-        ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp');
+// Determine yt-dlp path (Docker: pip install, Local: youtube-dl-exec bundled)
+let ytDlpPath = 'yt-dlp'; // Default: assume it's in PATH (Docker)
+if (process.platform === 'win32') {
+    // Windows local dev — use bundled yt-dlp from youtube-dl-exec
+    const localBin = path.join(process.cwd(), 'yt-dlp.exe');
+    if (fs.existsSync(localBin)) {
+        ytDlpPath = localBin;
+    } else {
+        try {
+            ytDlpPath = require('youtube-dl-exec/src/util').getBinPath();
+        } catch {
+            ytDlpPath = path.join(process.cwd(), 'node_modules', 'youtube-dl-exec', 'bin', 'yt-dlp.exe');
+        }
     }
 }
-console.log(`[Player] yt-dlp: ${ytDlpPath}`);
+console.log(`[Player] yt-dlp path: ${ytDlpPath}`);
 
+// Cookies file for age-restricted content
 const cookiesFile = path.join(process.cwd(), 'cookies.txt');
 const hasCookies = fs.existsSync(cookiesFile);
 if (hasCookies) console.log('[Player] cookies.txt found ✅');
+
+// ffmpeg path — use ffmpeg-static if available, otherwise system ffmpeg
+let ffmpegPath = 'ffmpeg';
+try {
+    const ffmpegStatic = require('ffmpeg-static');
+    if (ffmpegStatic && fs.existsSync(ffmpegStatic)) {
+        ffmpegPath = ffmpegStatic;
+    }
+} catch { /* use system ffmpeg */ }
+console.log(`[Player] ffmpeg path: ${ffmpegPath}`);
+
+/**
+ * Get the best audio stream URL using yt-dlp
+ */
+function getAudioUrl(url) {
+    return new Promise((resolve, reject) => {
+        const args = [
+            '--no-playlist',
+            '-f', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
+            '-g', // Print URL only, don't download
+            '--no-warnings',
+            '--no-check-certificates',
+        ];
+
+        if (hasCookies) {
+            args.push('--cookies', cookiesFile);
+        }
+
+        args.push(url);
+
+        console.log(`[yt-dlp] Getting audio URL for: ${url}`);
+        const proc = spawn(ytDlpPath, args, { windowsHide: true });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => { stdout += data.toString(); });
+        proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+        proc.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`[yt-dlp] Exit code ${code}: ${stderr}`);
+                reject(new Error(`yt-dlp failed: ${stderr.split('\n')[0] || 'Unknown error'}`));
+                return;
+            }
+            const audioUrl = stdout.trim().split('\n')[0];
+            if (!audioUrl) {
+                reject(new Error('yt-dlp returned empty URL'));
+                return;
+            }
+            console.log(`[yt-dlp] Got audio URL ✅ (${audioUrl.substring(0, 80)}...)`);
+            resolve(audioUrl);
+        });
+
+        proc.on('error', (err) => {
+            reject(new Error(`yt-dlp not found: ${err.message}`));
+        });
+
+        // Timeout after 30 seconds
+        setTimeout(() => {
+            proc.kill('SIGTERM');
+            reject(new Error('yt-dlp timed out (30s)'));
+        }, 30000);
+    });
+}
+
+/**
+ * Stream audio through ffmpeg and create Discord audio resource
+ */
+function createFfmpegStream(audioUrl) {
+    const args = [
+        '-reconnect', '1',
+        '-reconnect_streamed', '1',
+        '-reconnect_delay_max', '5',
+        '-i', audioUrl,
+        '-vn',                  // No video
+        '-ac', '2',             // Stereo
+        '-ar', '48000',         // 48kHz (Discord standard)
+        '-f', 'opus',           // Opus output
+        '-acodec', 'libopus',   // Opus codec
+        '-b:a', '128k',         // 128kbps bitrate
+        'pipe:1',               // Output to stdout
+    ];
+
+    const ffmpeg = spawn(ffmpegPath, args, {
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    ffmpeg.stderr.on('data', (data) => {
+        const msg = data.toString();
+        // Only log errors, not progress
+        if (msg.includes('Error') || msg.includes('error')) {
+            console.error('[ffmpeg]', msg.trim());
+        }
+    });
+
+    return ffmpeg;
+}
 
 async function playSong(client, guildId) {
     const queue = client.queues.get(guildId);
@@ -44,33 +150,32 @@ async function playSong(client, guildId) {
             throw new Error('Invalid song URL');
         }
 
-        // Use play-dl to get audio stream
-        const play = require('play-dl');
+        // Step 1: Get the direct audio URL via yt-dlp
+        const audioUrl = await getAudioUrl(song.url);
 
-        // Pass cookies to play-dl if playing YouTube
-        let stream;
-        try {
-            if (song.source === 'soundcloud' || !song.url.includes('youtube')) {
-                stream = await play.stream(song.url);
-            } else {
-                // Try playing YouTube
-                stream = await play.stream(song.url, {
-                    discordPlayerCompatibility: true
-                });
-            }
-        } catch (err) {
-            console.error('[Player] Error getting stream:', err.message);
-            throw new Error('ไม่สามารถเล่นเพลงนี้ได้ (YouTube อาจบล็อค หรือวิดีโอถูกจำกัด)');
-        }
+        // Step 2: Stream through ffmpeg
+        const ffmpegProcess = createFfmpegStream(audioUrl);
+        queue.ffmpegProcess = ffmpegProcess;
 
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
+        // Step 3: Create Discord audio resource from ffmpeg stdout
+        const resource = createAudioResource(ffmpegProcess.stdout, {
+            inputType: StreamType.OggOpus,
             inlineVolume: true,
         });
 
         resource.volume.setVolume(queue.volume / 100);
         queue.resource = resource;
-        queue.ffmpegProcess = null; // No ffmpeg process when using play-dl directly
+
+        // Handle ffmpeg errors
+        ffmpegProcess.on('error', (err) => {
+            console.error('[ffmpeg] Process error:', err.message);
+        });
+
+        ffmpegProcess.on('close', (code) => {
+            if (code !== 0 && code !== null) {
+                console.warn(`[ffmpeg] Exited with code ${code}`);
+            }
+        });
 
         if (!queue.player) {
             queue.player = createAudioPlayer({

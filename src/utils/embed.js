@@ -8,11 +8,12 @@ const COLORS = {
     info: 0x3B82F6,      // Blue
 };
 
-function formatDuration(seconds) {
-    if (!seconds || isNaN(seconds)) return 'Live 🔴';
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
+function formatDuration(ms) {
+    if (!ms || isNaN(ms)) return 'Live 🔴';
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = Math.floor(totalSeconds % 60);
     if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
     return `${m}:${String(s).padStart(2, '0')}`;
 }
@@ -31,7 +32,7 @@ function createNowPlayingEmbed(song) {
         .setThumbnail(song.thumbnail)
         .addFields(
             { name: '⏱️ ความยาว', value: formatDuration(song.duration), inline: true },
-            { name: '👤 ขอเพลงโดย', value: `${song.requestedBy}`, inline: true },
+            { name: '👤 ขอเพลงโดย', value: `${song.requestedBy?.displayName || song.requestedBy?.username || song.requestedBy || 'ไม่ทราบ'}`, inline: true },
         )
         .setFooter({ text: 'Somua Bot 🎶' })
         .setTimestamp();

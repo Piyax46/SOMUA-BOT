@@ -1,10 +1,12 @@
 # ใช้ Node.js เวอร์ชัน 20 เป็นแกนหลัก
 FROM node:20-bookworm-slim
 
-# ติดตั้ง ffmpeg, python3, pip, curl, และ yt-dlp ล่าสุด
-RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip curl && \
+# ติดตั้ง ffmpeg, python3, pip, curl, ca-certificates, และ yt-dlp ล่าสุด
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip curl ca-certificates && \
     pip3 install --break-system-packages yt-dlp && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    echo "yt-dlp version:" && yt-dlp --version && \
+    echo "ffmpeg version:" && ffmpeg -version | head -1
 
 # ตั้งค่าพื้นที่ทำงาน
 WORKDIR /app
