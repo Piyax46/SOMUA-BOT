@@ -46,7 +46,7 @@ console.log(`[Player] ffmpeg path: ${ffmpegPath}`);
 /**
  * Get the best audio stream URL using yt-dlp
  */
-function getAudioUrl(url) {
+async function getAudioUrl(url, useCookies = hasCookies) {
     return new Promise((resolve, reject) => {
         const args = [
             '--no-playlist',
@@ -56,13 +56,13 @@ function getAudioUrl(url) {
             '--no-check-certificates',
         ];
 
-        if (hasCookies) {
+        if (useCookies) {
             args.push('--cookies', cookiesFile);
         }
 
         args.push(url);
 
-        console.log(`[yt-dlp] Getting audio URL for: ${url}`);
+        console.log(`[yt-dlp] Getting audio URL for: ${url} (Cookies: ${useCookies})`);
         const proc = spawn(ytDlpPath, args, { windowsHide: true });
 
         let stdout = '';
@@ -73,8 +73,16 @@ function getAudioUrl(url) {
 
         proc.on('close', (code) => {
             if (code !== 0) {
-                console.error(`[yt-dlp] Exit code ${code}: ${stderr}`);
-                reject(new Error(`yt-dlp failed: ${stderr.split('\n')[0] || 'Unknown error'}`));
+                const errMsg = stderr.split('\n')[0] || 'Unknown error';
+                console.error(`[yt-dlp] Exit code ${code}: ${errMsg}`);
+                
+                // Fallback: If we used cookies and it failed (e.g., expired cookies), try again without cookies
+                if (useCookies) {
+                    console.log(`[yt-dlp] Retrying without cookies...`);
+                    resolve(getAudioUrl(url, false));
+                } else {
+                    reject(new Error(`yt-dlp failed: ${errMsg}`));
+                }
                 return;
             }
             const audioUrl = stdout.trim().split('\n')[0];
