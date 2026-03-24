@@ -50,7 +50,7 @@ function getAudioUrl(url) {
     return new Promise((resolve, reject) => {
         const args = [
             '--no-playlist',
-            '-f', 'bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio',
+            '-f', 'bestaudio/best', // The most robust format selection
             '-g', // Print URL only, don't download
             '--no-warnings',
             '--no-check-certificates',
